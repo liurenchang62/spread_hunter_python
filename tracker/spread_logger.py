@@ -2,7 +2,7 @@
 日志输出：两个 CSV 文件 + 终端打印。
 
 logs/spread_snapshots.csv  — 每秒快照所有大-小所对的价差（用于后续分析开平仓时机）
-logs/signals.csv            — 每次策略A触发时记录信号详情
+logs/signals.csv            — 每次检测到开仓机会时记录一行
 """
 
 import csv
@@ -56,7 +56,7 @@ class SpreadLogger:
     使用方式：
         logger = SpreadLogger()
         logger.maybe_snap(tick, latest, baseline)   # 每个 tick 调用
-        logger.log_signal(sig)                       # 信号触发时调用
+        logger.log_signal(sig)                       # 机会事件写入时调用
         logger.close()                               # 退出时调用
     """
 

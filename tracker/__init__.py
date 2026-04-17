@@ -6,7 +6,7 @@ tracker 模块：多交易所价差跟踪与信号识别。
 
 对外暴露：
     Tracker        — 主控制器，含 signal_queue（AsyncIO Queue）
-    Signal         — 信号数据类（trader 模块消费）
+    MarketEvent    — 市场事件（trader 模块消费）
 """
 
 from .tracker import Tracker

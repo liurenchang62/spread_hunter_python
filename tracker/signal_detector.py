@@ -1,11 +1,11 @@
 """
-策略 A 信号检测：大所异动 → 小所尚未跟上 → 发出做多/做空信号。
+信号检测：大所异动 → 小所尚未跟上 → 发出做多/做空机会。
 
 逻辑：
-  1. 每收到大所的 tick，检查该所在过去 A_LEADER_WINDOW_MS 毫秒内的价格变动
-  2. 如果变动超过 A_LEADER_MOVE_BPS，说明大所发生了明显异动
+  1. 每收到大所的 tick，检查该所在过去 LEADER_WINDOW_MS 毫秒内的价格变动
+  2. 如果变动超过 LEADER_MOVE_BPS，说明大所发生了明显异动
   3. 对每个小所计算当前异常价差（当前价差 - 基准价差）
-  4. 异常价差超过阈值 → 发出信号（表示小所还没跟上，有套利窗口）
+  4. 异常价差超过阈值 → 发出机会事件（表示小所还没跟上）
   5. 同标的同方向设置冷却时间，避免短时间内重复触发
 """
 
@@ -14,8 +14,8 @@ from collections import defaultdict, deque
 from typing import Optional
 
 from .config import (
-    A_LEADER_WINDOW_MS, A_LEADER_MOVE_BPS, A_ANOMALY_MIN_BPS,
-    A_COOLDOWN_MS, BIG_EXCHANGES, SMALL_EXCHANGES,
+    LEADER_WINDOW_MS, LEADER_MOVE_BPS, ANOMALY_MIN_BPS,
+    COOLDOWN_MS, BIG_EXCHANGES, SMALL_EXCHANGES,
 )
 from .baseline import BaselineTracker
 from .models import Tick, MarketEvent
@@ -43,8 +43,8 @@ class SignalDetector:
     ) -> list[MarketEvent]:
         """
         每收到一个 tick 调用一次。
-        只在热身完成后、且 tick 来自大所时才产生信号。
-        返回触发的 Signal 列表（通常 0-2 个）。
+        只在热身完成后、且 tick 来自大所时才产生机会事件。
+        返回 MarketEvent 列表（通常 0-3 个）。
         """
         if not baseline.warmed_up:
             return []
@@ -61,7 +61,7 @@ class SignalDetector:
         w.append((now_ns, tick.mid))
 
         # 清除窗口之外的旧数据
-        cutoff = now_ns - A_LEADER_WINDOW_MS * 1_000_000
+        cutoff = now_ns - LEADER_WINDOW_MS * 1_000_000
         while w and w[0][0] < cutoff:
             w.popleft()
 
@@ -75,7 +75,7 @@ class SignalDetector:
         move_bps = (tick.mid - oldest_mid) / oldest_mid * 10000
         abs_move = abs(move_bps)
 
-        if abs_move < A_LEADER_MOVE_BPS:
+        if abs_move < LEADER_MOVE_BPS:
             self._diag["no_big_move"] += 1
             return []
 
@@ -120,14 +120,14 @@ class SignalDetector:
                 self._diag["direction_mismatch"] += 1
                 continue
 
-            if abs(anomaly) < A_ANOMALY_MIN_BPS:
+            if abs(anomaly) < ANOMALY_MIN_BPS:
                 self._diag["anomaly_too_small"] += 1
                 continue
 
             # 冷却检查
             ck = (small, sym, direction)
             last_fire = self._cooldowns.get(ck, 0)
-            if (now_ns - last_fire) < A_COOLDOWN_MS * 1_000_000:
+            if (now_ns - last_fire) < COOLDOWN_MS * 1_000_000:
                 self._diag["cooldown"] += 1
                 continue
 

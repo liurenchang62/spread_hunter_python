@@ -21,7 +21,7 @@ class BaselineTracker:
     1. pair_baseline[(big, small, symbol)] = 大所mid vs 小所mid 的正常价差中位数（bps）
     2. ba_baseline[(exchange, symbol)]     = 某小所某标的的正常 bid-ask spread 中位数（bps）
 
-    只有 pair_baseline 用于策略A信号过滤。ba_baseline 留给后续策略B使用。
+    pair_baseline 用于跨所异常价差；ba_baseline 为小所买一卖一宽度基准（当前未参与信号条件）。
     """
 
     def __init__(self):

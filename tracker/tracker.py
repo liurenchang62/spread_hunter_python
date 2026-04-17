@@ -4,7 +4,7 @@
 运行流程：
   1. 拉取标的列表（5所交集，按成交额排序）
   2. 启动5所 WebSocket
-  3. 每个 tick：更新基准 → 检测信号 → 写日志
+  3. 每个 tick：更新基准 → 检测机会 → 写日志
   4. 每 CONSOLE_STAT_S 秒打印一次终端统计
   5. 每 SYMBOL_REFRESH_H 小时后台刷新标的列表
 
@@ -50,7 +50,7 @@ logger = logging.getLogger("tracker")
 class Tracker:
     """
     跟踪器主类。负责协调 symbol_selector / ws_feed / baseline / signal_detector / spread_logger。
-    对外暴露 signal_queue：asyncio.Queue[Signal]，trader 模块消费这个队列即可。
+    对外暴露 signal_queue：asyncio.Queue[MarketEvent]，trader 模块消费这个队列即可。
     """
 
     def __init__(self):
@@ -239,7 +239,7 @@ class Tracker:
         print(f"  已连接:   {n_connected}/5 所 ({', '.join(sorted(self.feed.connected)) if self.feed else ''})")
         print(f"  热身状态: {'[完成]' if bs['warmed_up'] else '[进行中]'}")
         print(f"  价差基准: {bs['pair_baselines']} 对  盘口基准: {bs['ba_baselines']} 个")
-        print(f"  信号数:   {self.detector.total_signals}")
+        print(f"  机会数:   {self.detector.total_signals}")
         print(f"  快照行数: {self.log.snap_count:,}")
 
         # 当前所有大-小对的价差概览（最多显示10个）
@@ -276,7 +276,7 @@ def _banner() -> str:
     return """
 ╔══════════════════════════════════════════════════════════════╗
 ║  Spread Tracker v1  —  跨所价差跟踪（仅观测，不交易）        ║
-║  策略A: 大所异动 → 小所延迟 → 记录信号和价差数据            ║
+║  大所异动 → 小所延迟 → 记录信号和价差数据                  ║
 ║  交易所: Binance / OKX (大) + Gate / Bitget / HTX (小)      ║
 ║  输出: logs/spread_snapshots.csv  logs/signals.csv           ║
 ╚══════════════════════════════════════════════════════════════╝"""
