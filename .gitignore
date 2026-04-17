@@ -32,6 +32,7 @@ Thumbs.db
 .env.local
 *.pem
 
-# Runtime logs (regenerate locally)
+# Runtime logs & tool outputs (regenerate locally)
 logs/*.log
 logs/*.csv
+tools/out/*.csv

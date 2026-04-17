@@ -119,7 +119,7 @@ class BaselineTracker:
 
         if small_tick.mid <= 0:
             return
-        spread = (big_tick.mid - small_tick.mid) / small_tick.mid * 10000
+        spread = (big_tick.mid - small_tick.mid) / small_tick.mid * 100  # 百分比制
 
         buf = self._pair_buf.setdefault(key, deque(maxlen=BASELINE_WINDOW))
         buf.append(spread)

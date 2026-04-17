@@ -116,7 +116,7 @@ class SpreadLogger:
         base = baseline.get_pair_baseline(big.exchange, small.exchange, big.symbol)
         if small.mid <= 0:
             return
-        spread = (big.mid - small.mid) / small.mid * 10000
+        spread = (big.mid - small.mid) / small.mid * 100  # 百分比制
         anomaly = spread - base
 
         row = {

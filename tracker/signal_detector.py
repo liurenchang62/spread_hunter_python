@@ -14,8 +14,8 @@ from collections import defaultdict, deque
 from typing import Optional
 
 from .config import (
-    LEADER_WINDOW_MS, LEADER_MOVE_BPS, ANOMALY_MIN_BPS,
-    COOLDOWN_MS, BIG_EXCHANGES, SMALL_EXCHANGES,
+    LEADER_WINDOW_MS, LEADER_MOVE_PCT, ANOMALY_MIN_PCT,
+    COOLDOWN_MS, MIN_SMALL_MID, BIG_EXCHANGES, SMALL_EXCHANGES,
 )
 from .baseline import BaselineTracker
 from .models import Tick, MarketEvent
@@ -72,17 +72,17 @@ class SignalDetector:
         if oldest_mid <= 0:
             return []
 
-        move_bps = (tick.mid - oldest_mid) / oldest_mid * 10000
-        abs_move = abs(move_bps)
+        move_pct = (tick.mid - oldest_mid) / oldest_mid * 100  # 百分比
+        abs_move = abs(move_pct)
 
-        if abs_move < LEADER_MOVE_BPS:
+        if abs_move < LEADER_MOVE_PCT:
             self._diag["no_big_move"] += 1
             return []
 
         self._diag["big_move_detected"] += 1
 
         # 方向：大所涨了 → 小所做多；大所跌了 → 小所做空
-        direction = "long" if move_bps > 0 else "short"
+        direction = "long" if move_pct > 0 else "short"
 
         # ── Step 2：对每个小所检查异常价差 ─────────────────────────────────
         signals = []
@@ -100,6 +100,10 @@ class SignalDetector:
                 self._diag["stale_small"] += 1
                 continue
 
+            # 小所价格过低时跳过（防除零/防异常）
+            if st.mid <= MIN_SMALL_MID:
+                continue
+
             # 检查基准是否建立
             if not baseline.has_pair_baseline(big, small, sym):
                 self._diag["no_baseline"] += 1
@@ -109,7 +113,7 @@ class SignalDetector:
             if anomaly is None:
                 continue
 
-            base_bps = baseline.get_pair_baseline(big, small, sym)
+            base_pct = baseline.get_pair_baseline(big, small, sym)  # 已是百分比
 
             # 方向校验：大所涨 → anomaly 应为正（大所比小所更贵）
             #            大所跌 → anomaly 应为负（大所比小所更便宜）
@@ -120,7 +124,7 @@ class SignalDetector:
                 self._diag["direction_mismatch"] += 1
                 continue
 
-            if abs(anomaly) < ANOMALY_MIN_BPS:
+            if abs(anomaly) < ANOMALY_MIN_PCT:
                 self._diag["anomaly_too_small"] += 1
                 continue
 
@@ -141,8 +145,8 @@ class SignalDetector:
                 symbol        = sym,
                 big_exchange  = big,
                 small_exchange= small,
-                anomaly_bps   = anomaly,
-                baseline_bps  = base_bps,
+                anomaly_bps   = anomaly,      # 已是 %
+                baseline_bps  = base_pct,      # 已是 %
                 big_mid       = tick.mid,
                 small_bid     = st.bid,
                 small_ask     = st.ask,
@@ -150,11 +154,11 @@ class SignalDetector:
                 ts_ns         = now_ns,
                 wall_ms       = tick.wall_ms,
                 direction     = direction,
-                big_move_bps  = move_bps,
+                big_move_bps  = move_pct,      # 已是 %
                 detail        = (
                     f"{big}→{small} {sym} {direction} "
-                    f"大所移动{move_bps:+.1f}bps "
-                    f"异常价差{anomaly:+.1f}bps(基准{base_bps:.1f})"
+                    f"大所移动{move_pct:+.2f}% "
+                    f"异常{anomaly:+.2f}%(基准{base_pct:.2f}%)"
                 ),
             )
             signals.append(sig)

@@ -15,8 +15,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Optional
 
-# 默认收敛阈值：|anomaly_bps| <= 2.0 认为价差已收敛到可接受范围
-DEFAULT_CONVERGENCE_THRESHOLD = 2.0
+# 默认收敛阈值：|anomaly| <= 0.2% 认为价差已收敛到可接受范围
+DEFAULT_CONVERGENCE_THRESHOLD = 0.2
 DEFAULT_MAX_SECONDS = 60  # 最多观察 60 秒
 
 
@@ -208,7 +208,7 @@ def write_output(results: list[dict], out_path: Path, threshold: float):
     durations = [r["duration_ms"] for r in results if r["converged"] and r["duration_ms"]]
     avg_duration = sum(durations) / len(durations) if durations else 0
 
-    print(f"\n分析完成（收敛阈值 |anomaly| <= {threshold} bps）:")
+    print(f"\n分析完成（收敛阈值 |anomaly| <= {threshold}%）:")
     print(f"  总信号数: {total}")
     print(f"  收敛信号: {converged} ({converged/total*100:.1f}%)")
     print(f"  平均收敛时间: {avg_duration:.0f} ms ({avg_duration/1000:.1f} 秒)")
@@ -220,7 +220,7 @@ def main():
     parser.add_argument("--signals", default="logs/signals.csv", help="信号 CSV 路径")
     parser.add_argument("--snapshots", default="logs/spread_snapshots.csv", help="快照 CSV 路径")
     parser.add_argument("--threshold", type=float, default=DEFAULT_CONVERGENCE_THRESHOLD,
-                        help=f"收敛阈值 |anomaly| (bps)，默认 {DEFAULT_CONVERGENCE_THRESHOLD}")
+                        help=f"收敛阈值 |anomaly| (%%)，默认 {DEFAULT_CONVERGENCE_THRESHOLD}%")
     parser.add_argument("--max-seconds", type=float, default=DEFAULT_MAX_SECONDS,
                         help=f"最大观察时间（秒），默认 {DEFAULT_MAX_SECONDS}")
     parser.add_argument("--out", default="tools/out/signal_convergence.csv", help="输出路径")
