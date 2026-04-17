@@ -61,7 +61,7 @@ class SpreadLogger:
     """
 
     def __init__(self):
-        self._sf, self._sw = _open_csv(SPREAD_LOG,  _SPREAD_HEADER, overwrite=False)  # 快照追加
+        self._sf, self._sw = _open_csv(SPREAD_LOG,  _SPREAD_HEADER, overwrite=True)   # 快照每次覆盖
         self._lf, self._lw = _open_csv(SIGNAL_LOG, _SIGNAL_HEADER, overwrite=True)   # 信号每次覆盖
 
         # 节流：每个 (big, small, symbol) 对每秒最多快照一次

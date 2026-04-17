@@ -1,0 +1,20 @@
+# 在项目根目录 spread_hunter_python 下执行（PowerShell / CMD）
+
+# 依赖（首次）
+pip install websockets requests urllib3
+# 可选，加快 JSON 解析：
+pip install orjson
+
+# 启动 Tracker（跨所价差采集与机会检测）
+python run_tracker.py
+# 等价：
+python -m tracker.tracker
+
+# 对 logs/signals.csv 做简单统计（需先有运行产生的 CSV）
+python tools/signal_stats.py
+python tools/signal_stats.py --file logs/signals.csv --top 20
+
+# 信号收敛分析：看每个信号触发后多久价差回归（|anomaly| <= 2bps）
+python tools/signal_convergence.py
+python tools/signal_convergence.py --threshold 2.0 --max-seconds 60
+# 输出：tools/out/signal_convergence.csv
