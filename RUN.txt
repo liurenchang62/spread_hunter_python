@@ -6,7 +6,7 @@ pip install websockets requests urllib3
 pip install orjson
 
 # 启动 Tracker（跨所价差采集与机会检测）
-python tracker/run_tracker.py
+python -m tracker.run_tracker
 # 等价：
 python -m tracker.tracker
 
