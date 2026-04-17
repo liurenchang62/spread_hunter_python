@@ -3,21 +3,49 @@
 
 运行：
     python tools/signal_convergence.py
-    python tools/signal_convergence.py --threshold 2.0 --max-seconds 60
+    python tools/signal_convergence.py --threshold 0.2 --max-seconds 60
 
 输出：tools/out/signal_convergence.csv
 """
 
 import argparse
 import csv
+import json
 import sys
 from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 # 默认收敛阈值：|anomaly| <= 0.2% 认为价差已收敛到可接受范围
 DEFAULT_CONVERGENCE_THRESHOLD = 0.2
 DEFAULT_MAX_SECONDS = 60  # 最多观察 60 秒
+
+
+def load_params(path: Path) -> dict:
+    """读取 tracker 运行时的参数配置。"""
+    if path.exists():
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+
+def get_snapshot_time_range(path: Path) -> tuple[float, float]:
+    """返回 snapshot 的最早和最晚 wall_ms。"""
+    if not path.exists():
+        return 0.0, 0.0
+    min_ts = float("inf")
+    max_ts = 0.0
+    with open(path, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            try:
+                ts = float(row["wall_ms"])
+                min_ts = min(min_ts, ts)
+                max_ts = max(max_ts, ts)
+            except (ValueError, KeyError):
+                continue
+    return (min_ts, max_ts) if min_ts != float("inf") else (0.0, 0.0)
 
 
 def load_snapshots(path: Path) -> dict[tuple, list[dict]]:
@@ -108,13 +136,43 @@ def find_convergence(
 
 def analyze(signals_path: Path, snapshots_path: Path, threshold: float, max_seconds: float):
     """主分析逻辑。"""
+    # 读取 tracker 参数
+    params = load_params(Path("logs/params.json"))
+    
+    # 读取 snapshot 时间范围
+    snap_start, snap_end = get_snapshot_time_range(snapshots_path)
+    snap_duration_ms = snap_end - snap_start if snap_end > snap_start else 0
+    
+    # 打印参数配置（整齐格式）
+    print("=" * 60)
+    print("【分析参数配置】")
+    print("-" * 60)
+    if params:
+        print(f"  大所移动阈值:     {params.get('LEADER_MOVE_PCT', '-'):>6}%")
+        print(f"  异常价差阈值:     {params.get('ANOMALY_MIN_PCT', '-'):>6}%")
+        print(f"  收敛阈值:         {params.get('CONVERGENCE_PCT', threshold):>6}%")
+        print(f"  观察窗口:         {params.get('LEADER_WINDOW_MS', '-'):>6} ms")
+        print(f"  冷却时间:         {params.get('COOLDOWN_MS', '-'):>6} ms")
+        print(f"  基准热身:         {params.get('BASELINE_WARMUP_S', '-'):>6} s")
+        print(f"  监控标的数:       {params.get('TOP_N_SYMBOLS', '-'):>6} 个")
+    else:
+        print(f"  收敛阈值:         {threshold:>6}% (命令行指定)")
+    print(f"  最大观察时间:     {max_seconds:>6} s")
+    print("-" * 60)
+    print("【数据时间范围】")
+    print(f"  快照起始: {datetime.fromtimestamp(snap_start/1000).strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"  快照结束: {datetime.fromtimestamp(snap_end/1000).strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"  总时长:   {snap_duration_ms/1000/60:.1f} 分钟 ({snap_duration_ms/1000:.0f} 秒)")
+    print("=" * 60)
+    print()
+    
     if not signals_path.exists():
         print(f"信号文件不存在: {signals_path}")
         sys.exit(1)
 
-    print(f"正在加载快照数据（可能较慢）...")
+    print(f"正在加载快照数据...")
     snapshot_index = load_snapshots(snapshots_path)
-    print(f"快照索引建立完成：{len(snapshot_index)} 个唯一交易对")
+    print(f"  快照索引: {len(snapshot_index)} 个唯一交易对")
 
     # 读取信号
     signals = []
@@ -135,7 +193,7 @@ def analyze(signals_path: Path, snapshots_path: Path, threshold: float, max_seco
             except (ValueError, KeyError):
                 continue
 
-    print(f"信号总数: {len(signals)}")
+    print(f"  信号总数: {len(signals)} 个")
 
     # 逐个分析收敛
     results = []
@@ -207,12 +265,22 @@ def write_output(results: list[dict], out_path: Path, threshold: float):
     converged = sum(1 for r in results if r["converged"])
     durations = [r["duration_ms"] for r in results if r["converged"] and r["duration_ms"]]
     avg_duration = sum(durations) / len(durations) if durations else 0
+    median_duration = sorted(durations)[len(durations)//2] if durations else 0
 
-    print(f"\n分析完成（收敛阈值 |anomaly| <= {threshold}%）:")
-    print(f"  总信号数: {total}")
-    print(f"  收敛信号: {converged} ({converged/total*100:.1f}%)")
-    print(f"  平均收敛时间: {avg_duration:.0f} ms ({avg_duration/1000:.1f} 秒)")
-    print(f"  输出文件: {out_path}")
+    print("\n" + "=" * 60)
+    print("【分析结果汇总】")
+    print("-" * 60)
+    print(f"  总信号数:         {total:>8} 个")
+    print(f"  收敛信号数:       {converged:>8} 个 ({converged/total*100:>5.1f}%)")
+    print(f"  未收敛信号数:     {total-converged:>8} 个 ({(total-converged)/total*100:>5.1f}%)")
+    print("-" * 60)
+    print(f"  平均收敛时间:     {avg_duration:>8.0f} ms ({avg_duration/1000:>5.2f} s)")
+    print(f"  中位数收敛时间:   {median_duration:>8.0f} ms ({median_duration/1000:>5.2f} s)")
+    print(f"  最短收敛时间:     {min(durations):>8.0f} ms ({min(durations)/1000:>5.2f} s)" if durations else "  最短收敛时间:     N/A")
+    print(f"  最长收敛时间:     {max(durations):>8.0f} ms ({max(durations)/1000:>5.2f} s)" if durations else "  最长收敛时间:     N/A")
+    print("-" * 60)
+    print(f"  输出文件:         {out_path}")
+    print("=" * 60)
 
 
 def main():

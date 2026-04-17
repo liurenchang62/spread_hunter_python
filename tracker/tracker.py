@@ -103,6 +103,10 @@ class Tracker:
 
     async def start(self):
         print(_banner())
+        
+        # 保存本次运行参数
+        self._save_params()
+        
         logger.info("正在拉取标的列表…")
 
         symbols = await self.symbol_sel.start()
@@ -211,6 +215,41 @@ class Tracker:
                     wall_ms        = wall_ms,
                 )
                 self.signal_queue.put_nowait(event)
+
+    def _save_params(self):
+        """保存本次运行的参数到 logs/params.json"""
+        import json
+        from . import config
+        
+        params = {
+            # 交易所配置
+            "BIG_EXCHANGES": config.BIG_EXCHANGES,
+            "SMALL_EXCHANGES": config.SMALL_EXCHANGES,
+            # 标的配置
+            "TOP_N_SYMBOLS": config.TOP_N_SYMBOLS,
+            "MIN_VOLUME_USDT": config.MIN_VOLUME_USDT,
+            # 基准配置
+            "BASELINE_WARMUP_S": config.BASELINE_WARMUP_S,
+            "BASELINE_WINDOW": config.BASELINE_WINDOW,
+            # 信号检测配置
+            "LEADER_WINDOW_MS": config.LEADER_WINDOW_MS,
+            "LEADER_MOVE_PCT": config.LEADER_MOVE_PCT,
+            "ANOMALY_MIN_PCT": config.ANOMALY_MIN_PCT,
+            "CONVERGENCE_PCT": config.CONVERGENCE_PCT,
+            "COOLDOWN_MS": config.COOLDOWN_MS,
+            "MIN_SMALL_MID": config.MIN_SMALL_MID,
+            # 日志配置
+            "SPREAD_SNAP_INTERVAL_S": config.SPREAD_SNAP_INTERVAL_S,
+            "CONSOLE_STAT_S": config.CONSOLE_STAT_S,
+        }
+        
+        params_path = config.LOGS_DIR / "params.json"
+        try:
+            with open(params_path, "w", encoding="utf-8") as f:
+                json.dump(params, f, indent=2, ensure_ascii=False)
+            logger.info(f"参数已保存: {params_path}")
+        except Exception as e:
+            logger.warning(f"保存参数失败: {e}")
 
     async def _shutdown(self):
         logger.info("正在退出…")
