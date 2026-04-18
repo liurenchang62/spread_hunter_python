@@ -26,7 +26,8 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     except Exception:
         pass
 
-from .config import CONSOLE_STAT_S, LOGS_DIR, BIG_EXCHANGES, SMALL_EXCHANGES
+from .config import CONSOLE_STAT_S, LOGS_DIR
+from clients import BIG_EXCHANGES, SMALL_EXCHANGES
 from .models import Tick, MarketEvent
 from .symbol_selector import SymbolSelector
 from .ws_feed import WSFeed

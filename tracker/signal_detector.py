@@ -15,8 +15,9 @@ from typing import Optional
 
 from .config import (
     LEADER_WINDOW_MS, LEADER_MOVE_PCT, ANOMALY_MIN_PCT,
-    COOLDOWN_MS, MIN_SMALL_MID, BIG_EXCHANGES, SMALL_EXCHANGES,
+    COOLDOWN_MS, MIN_SMALL_MID,
 )
+from clients import BIG_EXCHANGES, SMALL_EXCHANGES
 from .baseline import BaselineTracker
 from .models import Tick, MarketEvent
 

@@ -1,5 +1,8 @@
 """
-全局配置。修改此文件调整所有行为，核心逻辑不用动。
+Tracker 全局配置：仅保留追踪相关参数。
+
+交易所连接参数已移至 clients 模块：
+    from clients import BIG_EXCHANGES, SMALL_EXCHANGES, WS_URLS, REST_BASE
 """
 
 from pathlib import Path
@@ -8,29 +11,6 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 LOGS_DIR     = PROJECT_ROOT / "logs"
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
-
-# ─── 交易所分级 ───────────────────────────────────────────────────────────────
-BIG_EXCHANGES:   list[str] = ["binance", "okx"]
-SMALL_EXCHANGES: list[str] = ["gate", "bitget", "htx"]
-ALL_EXCHANGES:   list[str] = BIG_EXCHANGES + SMALL_EXCHANGES
-
-# ─── WebSocket 地址（全部是永续合约/USDT-M） ─────────────────────────────────
-WS_URLS: dict[str, str] = {
-    "binance": "wss://fstream.binance.com/stream",      # USDT-M 永续 combined stream
-    "okx":     "wss://ws.okx.com:8443/ws/v5/public",    # OKX 公共频道
-    "gate":    "wss://fx-ws.gateio.ws/v4/ws/usdt",      # Gate USDT 永续
-    "bitget":  "wss://ws.bitget.com/v2/ws/public",      # Bitget USDT-M
-    "htx":     "wss://api.hbdm.com/linear-swap-ws",     # HTX 线性永续（非现货）
-}
-
-# ─── REST 地址（仅用于启动时拉标的列表，不用于行情） ──────────────────────────
-REST_BASE: dict[str, str] = {
-    "binance": "https://fapi.binance.com",
-    "okx":     "https://www.okx.com",
-    "gate":    "https://api.gateio.ws",
-    "bitget":  "https://api.bitget.com",
-    "htx":     "https://api.hbdm.com",
-}
 
 # ─── 标的筛选 ─────────────────────────────────────────────────────────────────
 TOP_N_SYMBOLS       = 50           # 最多监控几个标的

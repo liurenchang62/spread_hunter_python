@@ -1,6 +1,9 @@
 """
 5所 WebSocket 行情接入。每个交易所一个独立的 async task，自动重连。
 
+交易所配置从 clients 模块导入：
+    from clients import WS_URLS, ALL_EXCHANGES, to_exchange_fmt, from_raw_symbol
+
 支持交易所（全部永续合约 / USDT-M）：
   - Binance   fstream combined bookTicker
   - OKX       books5 channel (SWAP)
@@ -33,49 +36,12 @@ except ImportError:
     def _loads(s) -> dict: return json.loads(s)
     def _dumps(d) -> str:  return json.dumps(d)
 
-from .config import WS_URLS, ALL_EXCHANGES
+from clients import WS_URLS, ALL_EXCHANGES, to_exchange_fmt, from_raw_symbol
 from .models import Tick
 
 logger = logging.getLogger("tracker.ws")
 
 TickCallback = Callable[[Tick], None]
-
-
-# ─── 标的格式转换 ─────────────────────────────────────────────────────────────
-
-def to_exchange_fmt(symbol: str, exchange: str) -> str:
-    """BTCUSDT → 各交易所的合约代码"""
-    base = symbol[:-4]          # 去掉末尾 USDT
-    if exchange == "binance":
-        return symbol.lower()           # btcusdt
-    elif exchange == "okx":
-        return f"{base}-USDT-SWAP"      # BTC-USDT-SWAP
-    elif exchange == "gate":
-        return f"{base}_USDT"           # BTC_USDT
-    elif exchange == "bitget":
-        return symbol                   # BTCUSDT
-    elif exchange == "htx":
-        return f"{base}-USDT"           # BTC-USDT
-    return symbol
-
-
-def from_raw_symbol(raw: str, exchange: str) -> Optional[str]:
-    """各交易所原始代码 → 内部 BTCUSDT 格式；不认识的返回 None"""
-    r = raw.upper()
-    if exchange == "binance":
-        return r if r.endswith("USDT") else None
-    elif exchange == "okx":
-        if r.endswith("-USDT-SWAP"):
-            return r.replace("-USDT-SWAP", "") + "USDT"
-    elif exchange == "gate":
-        if r.endswith("_USDT"):
-            return r.replace("_USDT", "") + "USDT"
-    elif exchange == "bitget":
-        return r if r.endswith("USDT") else None
-    elif exchange == "htx":
-        if r.endswith("-USDT"):
-            return r.replace("-USDT", "") + "USDT"
-    return None
 
 
 # ─── 解析函数（每所一个） ─────────────────────────────────────────────────────

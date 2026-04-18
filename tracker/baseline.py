@@ -11,7 +11,8 @@ import time
 from collections import deque
 from typing import Optional
 
-from .config import BASELINE_WINDOW, BASELINE_UPDATE_MS, BASELINE_WARMUP_S, BIG_EXCHANGES, SMALL_EXCHANGES
+from .config import BASELINE_WINDOW, BASELINE_UPDATE_MS, BASELINE_WARMUP_S
+from clients import BIG_EXCHANGES, SMALL_EXCHANGES
 from .models import Tick
 
 

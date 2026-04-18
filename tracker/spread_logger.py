@@ -11,7 +11,8 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from .config import SIGNAL_LOG, SPREAD_LOG, BIG_EXCHANGES, SMALL_EXCHANGES
+from .config import SIGNAL_LOG, SPREAD_LOG
+from clients import BIG_EXCHANGES, SMALL_EXCHANGES
 from .baseline import BaselineTracker
 from .models import Tick, MarketEvent, SpreadSnap
 

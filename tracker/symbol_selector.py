@@ -22,7 +22,8 @@ import urllib3
 # Windows 上本地 CA 缺失导致 SSL 验证失败很常见，统一关掉警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-from .config import REST_BASE, TOP_N_SYMBOLS, MIN_VOLUME_USDT, SYMBOL_REFRESH_H
+from .config import TOP_N_SYMBOLS, MIN_VOLUME_USDT, SYMBOL_REFRESH_H
+from clients import REST_BASE
 
 logger = logging.getLogger("tracker.symbols")
 
