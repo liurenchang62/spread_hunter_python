@@ -10,6 +10,9 @@ python -m tracker.run_tracker
 # 等价：
 python -m tracker.tracker
 
+# 启动 Tracker + Trader（联合模式，测试网下单）
+python run.py
+
 # 对 logs/signals.csv 做简单统计（需先有运行产生的 CSV）
 python tools/signal_stats.py
 python tools/signal_stats.py --file logs/signals.csv --top 20

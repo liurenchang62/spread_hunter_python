@@ -78,6 +78,25 @@ class Tracker:
         self._last_stat   = time.time()
         self._stop        = asyncio.Event()
 
+        # trader 注册的回调（同步）
+        self._tick_cb        = None   # cb(tick: Tick) — 每个 tick 触发，用于 in-flow exit 检查
+        self._opportunity_cb = None   # cb(sig: MarketEvent) — 仅 opportunity 信号触发，用于开仓
+
+    def register_tick_callback(self, cb) -> None:
+        """
+        trader 调用此方法注册 tick 回调。
+        cb(tick: Tick) 会在每次 _on_tick 结束时被同步调用（轻量操作）。
+        """
+        self._tick_cb = cb
+
+    def register_opportunity_callback(self, cb) -> None:
+        """
+        trader 调用此方法注册 opportunity 回调。
+        cb(sig: MarketEvent) 在 opportunity 信号产生时同步调用（in-flow，最短延迟）。
+        取代 signal_queue，实现 latest-wins 语义（每个信号直接传给 trader，不经队列积压）。
+        """
+        self._opportunity_cb = cb
+
     # ─── Tick 处理（同步，被 WS 回调调用）────────────────────────────────────
 
     def _on_tick(self, tick: Tick):
@@ -95,10 +114,17 @@ class Tracker:
             for sig in self.detector.check(tick, self.latest, self.baseline):
                 self.log.log_signal(sig)
                 SpreadLogger.print_signal(sig)
-                self.signal_queue.put_nowait(sig)
+                if self._opportunity_cb is not None:
+                    self._opportunity_cb(sig)
+                else:
+                    self.signal_queue.put_nowait(sig)
 
         # 价差快照日志（每对每秒一次）
         self.log.maybe_snap(tick, self.latest, self.baseline)
+
+        # 通知 trader（in-flow exit 检查）
+        if self._tick_cb is not None:
+            self._tick_cb(tick)
 
     # ─── 主循环 ───────────────────────────────────────────────────────────────
 
@@ -206,8 +232,10 @@ class Tracker:
                     symbol         = sym,
                     big_exchange   = big,
                     small_exchange = small,
-                    anomaly_bps    = anomaly,
-                    baseline_bps   = self.baseline.get_pair_baseline(big, small, sym),
+                    anomaly_pct    = anomaly,
+                    baseline_pct   = self.baseline.get_pair_baseline(big, small, sym),
+                    big_bid        = bt.bid,
+                    big_ask        = bt.ask,
                     big_mid        = bt.mid,
                     small_bid      = st.bid,
                     small_ask      = st.ask,

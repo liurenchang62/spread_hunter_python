@@ -1,0 +1,460 @@
+"""
+Trader：消费 tracker 的信号，执行开/平仓。
+
+架构（latest-wins，最低延迟）：
+  - tracker 调用 _on_opportunity(sig) 同步回调（in-flow，与 tick 处理同步）
+      cost_evaluate() + risk.check_can_open() 在此同步完成（纯内存操作）
+      通过 create_task 将实际 HTTP 下单调度到事件循环
+      latest-wins：同一 (big, small, sym) 的旧任务若未开始 HTTP 则取消
+  - tracker 调用 _on_tick(tick) 同步回调（in-flow exit 检查）
+      只做内存读写，触发 _do_exit task
+  - _timeout_loop：1s 定时器检查超时持仓
+  - _market_info_refresh_loop：每 MARKET_INFO_REFRESH_H 小时刷新市场信息
+  - risk._balance_refresh_loop：由 RiskManager 内部后台运行
+
+daily_loss 停机流程：
+  risk 触发 daily_loss → _on_opportunity 不再开仓 →
+  等待所有持仓平仓（_on_tick / _timeout_loop 正常平仓）→
+  Trader.start() 返回，由调用方决定是否退出进程
+
+LIVE_TRADING_ON = False 时仅使用测试网/Demo 环境。
+"""
+
+import asyncio
+import logging
+import sys
+import time
+
+if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
+from clients import to_exchange_fmt
+from tracker.models import MarketEvent, Tick
+from trader.config import (
+    CONVERGENCE_PCT,
+    LIVE_TRADING_ON,
+    MAX_HOLD_SECONDS,
+    MIN_ANOMALY_TO_OPEN_PCT,
+    STOP_LOSS_PCT,
+    TESTNET_EXCHANGES,
+    MARKET_INFO_REFRESH_H,
+)
+from trader.cost_model import CostResult, evaluate as cost_evaluate
+from trader.exchange_client import build_clients, OrderResult
+from trader.market_info import MarketInfo, refresh_market_info
+from trader.position import Leg, Position
+from trader.position_manager import PositionManager
+from trader.risk import RiskManager
+
+logger = logging.getLogger("trader")
+
+
+class Trader:
+    """
+    与 Tracker 协同工作。
+
+    启动方式：
+        tracker = Tracker()
+        trader  = Trader(tracker)
+        await asyncio.gather(tracker.start(), trader.start())
+    """
+
+    def __init__(self, tracker):
+        self.tracker = tracker
+        self._active = tracker.active_positions
+
+        self.pm      = PositionManager(self._active)
+        self.clients = build_clients(live=LIVE_TRADING_ON)
+        self.mi      = MarketInfo()
+        self.risk    = RiskManager(self.clients)
+
+        # latest-wins 开仓任务表：key=(big,small,sym), value=asyncio.Task
+        # 每次新信号到来时，若旧任务尚未完成则取消（避免处理陈旧信号）
+        self._entry_tasks: dict[tuple, asyncio.Task] = {}
+
+        # 平仓任务表（防止同一仓位被重复平仓）
+        self._exit_tasks: dict[str, asyncio.Task] = {}   # pos_id → Task
+
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._stop = asyncio.Event()
+
+        # 统计
+        self._n_opened  = 0
+        self._n_closed  = 0
+        self._total_pnl = 0.0
+
+        mode = "主网实盘" if LIVE_TRADING_ON else "测试网/Demo"
+        logger.info(f"[trader] 初始化 | 模式={mode} | 客户端={list(self.clients.keys())}")
+
+    # ─── 主入口 ───────────────────────────────────────────────────────────────
+
+    async def start(self):
+        self._loop = asyncio.get_running_loop()
+
+        # 注册同步回调（in-flow，最低延迟）
+        self.tracker.register_opportunity_callback(self._on_opportunity)
+        self.tracker.register_tick_callback(self._on_tick)
+
+        # 初始拉取市场信息
+        symbols = set(self.tracker.symbol_sel.symbols) if hasattr(self.tracker, "symbol_sel") else set()
+        if symbols:
+            await refresh_market_info(self.mi, symbols)
+
+        # 启动风控后台（余额查询 + 日重置）
+        await self.risk.start()
+
+        logger.info("[trader] 开始处理信号…")
+        try:
+            await asyncio.gather(
+                self._timeout_loop(),
+                self._market_info_refresh_loop(symbols),
+                self._daily_halt_monitor(),
+            )
+        finally:
+            if self.risk._balance_refresh_task:
+                self.risk._balance_refresh_task.cancel()
+            await self._close_all_clients()
+            logger.info(
+                f"[trader] 退出 | 累计开仓={self._n_opened} 平仓={self._n_closed}"
+                f" 总PnL={self._total_pnl:+.4f} USDT"
+            )
+
+    def stop(self):
+        self._stop.set()
+        self.risk.stop()
+
+    # ─── Opportunity 回调（同步，in-flow，最低延迟）──────────────────────────
+
+    def _on_opportunity(self, sig: MarketEvent):
+        """
+        tracker 每产生一个 opportunity 信号就同步调用此方法。
+
+        同步部分（纯内存，μs 级）：
+          1. 基本过滤（交易所/最小异常）
+          2. 仓位限制检查
+          3. cost_evaluate（纯数学，无 I/O）
+          4. risk.check_can_open（纯内存缓存，无 I/O）
+
+        若通过：取消同一 key 的旧任务 → 创建新任务（HTTP 下单异步执行）
+        """
+        if self._loop is None:
+            return
+
+        big, small, sym = sig.big_exchange, sig.small_exchange, sig.symbol
+
+        # 交易所过滤
+        if not LIVE_TRADING_ON:
+            if big not in TESTNET_EXCHANGES or small not in TESTNET_EXCHANGES:
+                return
+        if big not in self.clients or small not in self.clients:
+            return
+
+        # 基本信号过滤
+        if abs(sig.anomaly_pct) < MIN_ANOMALY_TO_OPEN_PCT:
+            return
+
+        # 仓位限制
+        if not self.pm.can_open(big, small, sym):
+            return
+
+        # 成本模型（同步，纯计算）
+        cr: CostResult = cost_evaluate(sig, big, small, self.mi)
+        if not cr.should_trade:
+            logger.debug(f"[trader] 成本模型拒绝 | {sym} {big}/{small} | {cr.reason}")
+            return
+
+        # 风控检查（同步，纯内存缓存）
+        notional = cr.target_qty * sig.small_mid * 2  # 两腿估算名义价值
+        ok, reason = self.risk.check_can_open(big, small, sym, notional)
+        if not ok:
+            logger.debug(f"[trader] 风控拒绝 | {sym} {big}/{small} | {reason}")
+            return
+
+        # latest-wins：取消同 key 的旧任务
+        key = (big, small, sym)
+        old_task = self._entry_tasks.get(key)
+        if old_task and not old_task.done():
+            old_task.cancel()
+
+        # 调度新任务（HTTP 下单在事件循环中异步执行）
+        task = self._loop.create_task(self._place_entry(sig, cr))
+        self._entry_tasks[key] = task
+
+    # ─── Tick 回调（同步，in-flow exit 检查）─────────────────────────────────
+
+    def _on_tick(self, tick: Tick):
+        if self._loop is None:
+            return
+        sym = tick.symbol
+        for pos in self.pm.open_positions():
+            if pos.symbol != sym or pos.status != "open":
+                continue
+            # 已有平仓任务时跳过（避免重复下单）
+            if pos.id in self._exit_tasks and not self._exit_tasks[pos.id].done():
+                continue
+
+            big, small = pos.big_exchange, pos.small_exchange
+            latest   = self.tracker.latest.get(sym, {})
+            big_tick = latest.get(big)
+            sml_tick = latest.get(small)
+            if not big_tick or not sml_tick:
+                continue
+
+            anomaly = self.tracker.baseline.get_pair_anomaly(
+                big, small, sym, big_tick.mid, sml_tick.mid
+            )
+            if anomaly is None:
+                continue
+
+            reason = self._check_exit_reason(pos, anomaly)
+            if reason:
+                task = self._loop.create_task(self._do_exit(pos, anomaly, reason))
+                self._exit_tasks[pos.id] = task
+
+    # ─── 开仓执行（async，HTTP I/O）─────────────────────────────────────────
+
+    async def _place_entry(self, ev: MarketEvent, cr: CostResult):
+        big, small, sym = ev.big_exchange, ev.small_exchange, ev.symbol
+
+        # 二次检查（任务排队期间状态可能变化）
+        if not self.pm.can_open(big, small, sym):
+            return
+        ok, reason = self.risk.check_can_open(
+            big, small, sym, cr.target_qty * ev.small_mid * 2
+        )
+        if not ok:
+            return
+
+        logger.info(
+            f"[trader] ENTRY | {sym} {big}/{small} dir={ev.direction}"
+            f" anomaly={ev.anomaly_pct:+.3f}%"
+            f" qty={cr.target_qty:.6f} est_net={cr.net_profit_usdt:+.4f}USDT"
+            f" roi={cr.net_roi:.4f}"
+        )
+
+        small_side = "buy"  if ev.direction == "long" else "sell"
+        big_side   = "sell" if ev.direction == "long" else "buy"
+        small_sym  = to_exchange_fmt(sym, small)
+        big_sym    = to_exchange_fmt(sym, big)
+
+        # 并发下两腿
+        small_task = self.clients[small].place_order(
+            symbol=small_sym, side=small_side,
+            target_qty=cr.target_qty,
+            ref_price=ev.small_ask if small_side == "buy" else ev.small_bid,
+            symbol_info=self.mi.get_symbol_info(small, sym),
+        )
+        big_task = self.clients[big].place_order(
+            symbol=big_sym, side=big_side,
+            target_qty=cr.target_qty,
+            ref_price=ev.big_bid if big_side == "sell" else ev.big_ask,
+            symbol_info=self.mi.get_symbol_info(big, sym),
+        )
+        small_res, big_res = await asyncio.gather(small_task, big_task)
+
+        # 通知风控
+        self.risk.on_order_placed(small)
+        self.risk.on_order_placed(big)
+        self.risk.on_order_result(small_res.success)
+        self.risk.on_order_result(big_res.success)
+
+        if not small_res.success or not big_res.success:
+            logger.warning(
+                f"[trader] 开仓失败 {sym} | small_ok={small_res.success} big_ok={big_res.success}"
+                f" | small_err={small_res.error} big_err={big_res.error}"
+            )
+            await self._emergency_close(ev, small_res, big_res, small_sym, big_sym, small_side, big_side)
+            return
+
+        small_leg = Leg(
+            exchange=small, symbol=small_sym, side=small_side,
+            order_id=small_res.order_id, entry_price=small_res.fill_price,
+            size_usdt=small_res.fill_size * small_res.fill_price,
+            size_base=small_res.fill_size, fee_usdt=small_res.fee_usdt,
+        )
+        big_leg = Leg(
+            exchange=big, symbol=big_sym, side=big_side,
+            order_id=big_res.order_id, entry_price=big_res.fill_price,
+            size_usdt=big_res.fill_size * big_res.fill_price,
+            size_base=big_res.fill_size, fee_usdt=big_res.fee_usdt,
+        )
+        pos = Position(
+            symbol=sym, big_exchange=big, small_exchange=small,
+            direction=ev.direction, small_leg=small_leg, big_leg=big_leg,
+            open_anomaly_pct=ev.anomaly_pct,
+        )
+        self.pm.add_position(pos)
+        self._n_opened += 1
+
+        notional = (small_res.fill_size * small_res.fill_price
+                    + big_res.fill_size * big_res.fill_price)
+        self.risk.on_position_opened(notional)
+
+        # 开仓后立即解冻基准，避免异常价格污染滚动中位数
+        self.tracker.baseline.unfreeze_pair(big, small, sym)
+
+        logger.info(
+            f"[trader] 开仓成功 {pos.id} | small@{small_res.fill_price:.4f}"
+            f" big@{big_res.fill_price:.4f}"
+        )
+
+    # ─── 平仓执行 ─────────────────────────────────────────────────────────────
+
+    async def _do_exit(self, pos: Position, anomaly: float, reason: str):
+        if pos.status != "open":
+            return
+
+        logger.info(
+            f"[trader] EXIT | {pos.id} {pos.symbol} reason={reason}"
+            f" anomaly={anomaly:+.3f}% hold={pos.hold_seconds:.1f}s"
+        )
+        self.pm.mark_closing(pos.id)
+
+        small_close_side = "sell" if pos.small_leg.side == "buy" else "buy"
+        big_close_side   = "sell" if pos.big_leg.side   == "buy" else "buy"
+
+        ref_small = self.tracker.latest.get(pos.symbol, {}).get(pos.small_exchange)
+        ref_big   = self.tracker.latest.get(pos.symbol, {}).get(pos.big_exchange)
+        p_small   = ref_small.mid if ref_small else pos.small_leg.entry_price
+        p_big     = ref_big.mid   if ref_big   else pos.big_leg.entry_price
+
+        small_task = self.clients[pos.small_exchange].place_order(
+            symbol=pos.small_leg.symbol, side=small_close_side,
+            target_qty=pos.small_leg.size_base, ref_price=p_small,
+            symbol_info=self.mi.get_symbol_info(pos.small_exchange, pos.symbol),
+        )
+        big_task = self.clients[pos.big_exchange].place_order(
+            symbol=pos.big_leg.symbol, side=big_close_side,
+            target_qty=pos.big_leg.size_base, ref_price=p_big,
+            symbol_info=self.mi.get_symbol_info(pos.big_exchange, pos.symbol),
+        )
+        small_res, big_res = await asyncio.gather(small_task, big_task)
+
+        self.risk.on_order_placed(pos.small_exchange)
+        self.risk.on_order_placed(pos.big_exchange)
+        self.risk.on_order_result(small_res.success)
+        self.risk.on_order_result(big_res.success)
+
+        if not small_res.success or not big_res.success:
+            logger.warning(
+                f"[trader] 平仓失败 {pos.id} | small={small_res.success} big={big_res.success}"
+                f" | {small_res.error} | {big_res.error}"
+            )
+
+        notional = pos.small_leg.size_usdt + pos.big_leg.size_usdt
+        closed = self.pm.close_position(
+            pos_id=pos.id, close_anomaly_pct=anomaly, reason=reason,
+            small_close_result=small_res, big_close_result=big_res,
+        )
+        if closed:
+            self._n_closed  += 1
+            self._total_pnl += closed.pnl_usdt
+            self.risk.on_position_closed(notional, closed.pnl_usdt)
+            logger.info(
+                f"[trader] 平仓完成 {pos.id} | pnl={closed.pnl_usdt:+.4f} USDT"
+                f" | 累计PnL={self._total_pnl:+.4f} USDT"
+            )
+
+    # ─── 超时检查（1s timer）────────────────────────────────────────────────
+
+    async def _timeout_loop(self):
+        while not self._stop.is_set():
+            await asyncio.sleep(1.0)
+            for pos in self.pm.open_positions():
+                if pos.status != "open":
+                    continue
+                if pos.id in self._exit_tasks and not self._exit_tasks[pos.id].done():
+                    continue
+                if pos.hold_seconds >= MAX_HOLD_SECONDS:
+                    task = asyncio.ensure_future(self._do_exit(pos, 0.0, "timeout"))
+                    self._exit_tasks[pos.id] = task
+
+    # ─── 日止损监控 ────────────────────────────────────────────────────────
+
+    async def _daily_halt_monitor(self):
+        """
+        检测 daily_loss 停机：等待所有持仓平仓后，退出 trader 主循环。
+        """
+        while not self._stop.is_set():
+            await asyncio.sleep(2.0)
+            rs = self.risk.state
+            if rs.halted and rs.halt_type == "daily_loss":
+                logger.error(
+                    f"[trader] 日止损触发，等待持仓全部平仓后退出… | {rs.halt_reason}"
+                )
+                # 等待所有持仓平仓
+                deadline = time.monotonic() + MAX_HOLD_SECONDS + 30
+                while time.monotonic() < deadline:
+                    if not self.pm.open_positions():
+                        break
+                    await asyncio.sleep(1.0)
+                logger.error("[trader] 日止损停机，退出 trader")
+                self._stop.set()
+                return
+
+    # ─── 市场信息定期刷新 ────────────────────────────────────────────────────
+
+    async def _market_info_refresh_loop(self, symbols: set):
+        while not self._stop.is_set():
+            await asyncio.sleep(MARKET_INFO_REFRESH_H * 3600)
+            if hasattr(self.tracker, "symbol_sel"):
+                symbols = set(self.tracker.symbol_sel.symbols)
+            if symbols:
+                await refresh_market_info(self.mi, symbols)
+
+    # ─── 辅助 ────────────────────────────────────────────────────────────────
+
+    def _check_exit_reason(self, pos: Position, anomaly: float) -> str:
+        if pos.hold_seconds >= MAX_HOLD_SECONDS:
+            return "timeout"
+        if abs(anomaly) <= CONVERGENCE_PCT:
+            return "convergence"
+        if pos.direction == "long"  and anomaly < -STOP_LOSS_PCT:
+            return "stop_loss"
+        if pos.direction == "short" and anomaly >  STOP_LOSS_PCT:
+            return "stop_loss"
+        return ""
+
+    async def _emergency_close(
+        self,
+        ev: MarketEvent,
+        small_res: OrderResult,
+        big_res: OrderResult,
+        small_sym: str,
+        big_sym: str,
+        small_side: str,
+        big_side: str,
+    ):
+        """一腿成功一腿失败时，撤销已成交的腿以恢复 delta 中性。"""
+        tasks = []
+        if small_res.success and small_res.fill_size > 0:
+            rev = "sell" if small_side == "buy" else "buy"
+            tasks.append(self.clients[ev.small_exchange].place_order(
+                symbol=small_sym, side=rev, target_qty=small_res.fill_size,
+                ref_price=ev.small_mid,
+                symbol_info=self.mi.get_symbol_info(ev.small_exchange, ev.symbol),
+            ))
+        if big_res.success and big_res.fill_size > 0:
+            rev = "sell" if big_side == "buy" else "buy"
+            tasks.append(self.clients[ev.big_exchange].place_order(
+                symbol=big_sym, side=rev, target_qty=big_res.fill_size,
+                ref_price=ev.big_mid,
+                symbol_info=self.mi.get_symbol_info(ev.big_exchange, ev.symbol),
+            ))
+        if tasks:
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for r in results:
+                if isinstance(r, Exception) or (hasattr(r, "success") and not r.success):
+                    err = str(r) if isinstance(r, Exception) else r.error
+                    logger.error(f"[trader] 紧急平仓失败（需人工处理）: {err}")
+
+    async def _close_all_clients(self):
+        for client in self.clients.values():
+            try:
+                await client.close()
+            except Exception:
+                pass

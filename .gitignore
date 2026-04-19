@@ -32,6 +32,7 @@ Thumbs.db
 .env.local
 *.pem
 clients/api_keys.py
+env/
 
 # Runtime logs & tool outputs (regenerate locally)
 logs/*.log

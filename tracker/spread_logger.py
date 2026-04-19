@@ -26,14 +26,14 @@ _SPREAD_HEADER = [
     "big_ex", "small_ex",
     "big_bid", "big_ask", "big_mid",
     "small_bid", "small_ask", "small_mid",
-    "spread_bps", "baseline_bps", "anomaly_bps",
+    "spread_pct", "baseline_pct", "anomaly_pct",
 ]
 
 _SIGNAL_HEADER = [
     "wall_ms", "symbol", "direction",
     "big_ex", "small_ex",
     "big_mid", "small_bid", "small_ask", "small_mid",
-    "big_move_bps", "anomaly_bps", "baseline_bps",
+    "big_move_pct", "anomaly_pct", "baseline_pct",
     "detail",
 ]
 
@@ -131,9 +131,9 @@ class SpreadLogger:
             "small_bid":    f"{small.bid:.6f}",
             "small_ask":    f"{small.ask:.6f}",
             "small_mid":    f"{small.mid:.6f}",
-            "spread_bps":   f"{spread:.3f}",
-            "baseline_bps": f"{base:.3f}",
-            "anomaly_bps":  f"{anomaly:.3f}",
+            "spread_pct":   f"{spread:.4f}",
+            "baseline_pct": f"{base:.4f}",
+            "anomaly_pct":  f"{anomaly:.4f}",
         }
         self._sw.writerow(row)
         self.snap_count += 1
@@ -151,9 +151,9 @@ class SpreadLogger:
             "small_bid":    f"{sig.small_bid:.6f}",
             "small_ask":    f"{sig.small_ask:.6f}",
             "small_mid":    f"{sig.small_mid:.6f}",
-            "big_move_bps": f"{sig.big_move_bps:.3f}",
-            "anomaly_bps":  f"{sig.anomaly_bps:.3f}",
-            "baseline_bps": f"{sig.baseline_bps:.3f}",
+            "big_move_pct": f"{sig.big_move_pct:.4f}",
+            "anomaly_pct":  f"{sig.anomaly_pct:.4f}",
+            "baseline_pct": f"{sig.baseline_pct:.4f}",
             "detail":       sig.detail,
         }
         self._lw.writerow(row)
@@ -170,8 +170,8 @@ class SpreadLogger:
             f"\033[96m{sig.symbol}\033[0m "
             f"{d_mark} "
             f"\033[92m{sig.big_exchange}\033[0m→\033[91m{sig.small_exchange}\033[0m "
-            f"大所移动{sig.big_move_bps:+.1f}bps "
-            f"异常={sig.anomaly_bps:.1f}bps(基准{sig.baseline_bps:.1f}) "
+            f"大所移动{sig.big_move_pct:+.3f}% "
+            f"异常={sig.anomaly_pct:.3f}%(基准{sig.baseline_pct:.3f}%) "
             f"小所{sig.small_exchange}: bid={sig.small_bid:.4f} ask={sig.small_ask:.4f}"
         )
 

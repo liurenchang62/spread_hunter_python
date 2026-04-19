@@ -93,7 +93,7 @@ class BaselineTracker:
             return None
         if small_mid <= 0:
             return None
-        current = (big_mid - small_mid) / small_mid * 10000
+        current = (big_mid - small_mid) / small_mid * 100   # %，与 pair_base 单位一致
         return current - base
 
     def get_pair_baseline(self, big: str, small: str, symbol: str) -> float:
@@ -102,6 +102,17 @@ class BaselineTracker:
 
     def has_pair_baseline(self, big: str, small: str, symbol: str) -> bool:
         return (big, small, symbol) in self.pair_base
+
+    # ─── 交易后基准控制 ───────────────────────────────────────────────────────
+
+    def unfreeze_pair(self, big: str, small: str, symbol: str) -> None:
+        """
+        交易完成后调用：将该 pair 的 _pair_last 重置为 0，
+        使下一个 tick 立即更新基准（而不是等节流周期）。
+        实际效果：恢复正常基准更新，避免异常价格在窗口内残留太久。
+        """
+        key = (big, small, symbol)
+        self._pair_last[key] = 0
 
     # ─── 内部方法 ─────────────────────────────────────────────────────────────
 

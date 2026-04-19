@@ -146,8 +146,10 @@ class SignalDetector:
                 symbol        = sym,
                 big_exchange  = big,
                 small_exchange= small,
-                anomaly_bps   = anomaly,      # 已是 %
-                baseline_bps  = base_pct,      # 已是 %
+                anomaly_pct   = anomaly,
+                baseline_pct  = base_pct,
+                big_bid       = tick.bid,
+                big_ask       = tick.ask,
                 big_mid       = tick.mid,
                 small_bid     = st.bid,
                 small_ask     = st.ask,
@@ -155,7 +157,7 @@ class SignalDetector:
                 ts_ns         = now_ns,
                 wall_ms       = tick.wall_ms,
                 direction     = direction,
-                big_move_bps  = move_pct,      # 已是 %
+                big_move_pct  = move_pct,
                 detail        = (
                     f"{big}→{small} {sym} {direction} "
                     f"大所移动{move_pct:+.2f}% "

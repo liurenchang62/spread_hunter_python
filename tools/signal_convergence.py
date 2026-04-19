@@ -65,9 +65,9 @@ def load_snapshots(path: Path) -> dict[tuple, list[dict]]:
                 key = (row["big_ex"], row["small_ex"], row["symbol"])
                 index[key].append({
                     "wall_ms": float(row["wall_ms"]),
-                    "anomaly_bps": float(row["anomaly_bps"]),
-                    "spread_bps": float(row["spread_bps"]),
-                    "baseline_bps": float(row["baseline_bps"]),
+                    "anomaly_pct": float(row["anomaly_pct"]),
+                    "spread_pct": float(row["spread_pct"]),
+                    "baseline_pct": float(row["baseline_pct"]),
                     "big_mid": float(row["big_mid"]),
                     "small_mid": float(row["small_mid"]),
                 })
@@ -114,7 +114,7 @@ def find_convergence(
             break
 
         observations += 1
-        anom = snap["anomaly_bps"]
+        anom = snap["anomaly_pct"]
         final_anomaly = anom
         max_observed_anomaly = max(max_observed_anomaly, abs(anom))
 
@@ -186,9 +186,9 @@ def analyze(signals_path: Path, snapshots_path: Path, threshold: float, max_seco
                     "direction": row["direction"],
                     "big_ex": row["big_ex"],
                     "small_ex": row["small_ex"],
-                    "initial_anomaly": float(row["anomaly_bps"]),
-                    "baseline": float(row["baseline_bps"]),
-                    "big_move": float(row["big_move_bps"]),
+                    "initial_anomaly": float(row["anomaly_pct"]),
+                    "baseline": float(row["baseline_pct"]),
+                    "big_move": float(row["big_move_pct"]),
                 })
             except (ValueError, KeyError):
                 continue
@@ -234,9 +234,9 @@ def write_output(results: list[dict], out_path: Path, threshold: float):
     """写入 CSV 结果。"""
     header = [
         "signal_time_ms", "symbol", "direction", "big_ex", "small_ex",
-        "initial_anomaly_bps", "baseline_bps", "big_move_bps",
+        "initial_anomaly_pct", "baseline_pct", "big_move_pct",
         "converged", "converge_time_ms", "duration_ms",
-        "max_abs_anomaly_bps", "final_anomaly_bps", "observations",
+        "max_abs_anomaly_pct", "final_anomaly_pct", "observations",
     ]
 
     with open(out_path, "w", newline="", encoding="utf-8") as f:
@@ -249,14 +249,14 @@ def write_output(results: list[dict], out_path: Path, threshold: float):
                 "direction": r["direction"],
                 "big_ex": r["big_ex"],
                 "small_ex": r["small_ex"],
-                "initial_anomaly_bps": f"{r['initial_anomaly']:.3f}",
-                "baseline_bps": f"{r['baseline']:.3f}",
-                "big_move_bps": f"{r['big_move']:.3f}",
+                "initial_anomaly_pct": f"{r['initial_anomaly']:.3f}",
+                "baseline_pct": f"{r['baseline']:.3f}",
+                "big_move_pct": f"{r['big_move']:.3f}",
                 "converged": "1" if r["converged"] else "0",
                 "converge_time_ms": f"{r['converge_time_ms']:.0f}" if r["converge_time_ms"] else "",
                 "duration_ms": f"{r['duration_ms']:.0f}" if r["duration_ms"] else "",
-                "max_abs_anomaly_bps": f"{r['max_anomaly']:.3f}",
-                "final_anomaly_bps": f"{r['final_anomaly']:.3f}",
+                "max_abs_anomaly_pct": f"{r['max_anomaly']:.3f}",
+                "final_anomaly_pct": f"{r['final_anomaly']:.3f}",
                 "observations": r["observations"],
             })
 

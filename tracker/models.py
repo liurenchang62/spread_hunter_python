@@ -31,16 +31,18 @@ class MarketEvent:
 
     event_type:
       "opportunity"      — tracker 发现价差异常，可能值得开仓
-                           direction / big_move_bps / detail 有值
+                           direction / big_move_pct / detail 有值
       "position_update"  — 对某个已登记持仓的定时推送，供 trader 判断平仓
-                           direction / big_move_bps / detail 为空/0
+                           direction / big_move_pct / detail 为空/0
     """
     event_type:    str    # "opportunity" | "position_update"
     symbol:        str
     big_exchange:  str
     small_exchange: str
-    anomaly_bps:   float  # 当前价差 - 基准
-    baseline_bps:  float  # 滚动基准
+    anomaly_pct:   float  # 当前价差 - 基准（%，per-coin）
+    baseline_pct:  float  # 滚动基准（%，per-coin）
+    big_bid:       float
+    big_ask:       float
     big_mid:       float
     small_bid:     float
     small_ask:     float
@@ -49,7 +51,7 @@ class MarketEvent:
     wall_ms:       float
     # opportunity 专有字段（position_update 时为空/0）
     direction:     str   = ""
-    big_move_bps:  float = 0.0
+    big_move_pct:  float = 0.0   # 大所近期移动幅度（%）
     detail:        str   = ""
 
 
@@ -72,6 +74,6 @@ class SpreadSnap:
     small_bid:    float
     small_ask:    float
     small_mid:    float
-    spread_bps:   float   # (big_mid - small_mid) / small_mid * 10000
-    baseline_bps: float   # 该对的滚动中位数基准
-    anomaly_bps:  float   # spread_bps - baseline_bps
+    spread_pct:   float   # (big_mid - small_mid) / small_mid * 100，per-coin %
+    baseline_pct: float   # 该对的滚动中位数基准（%）
+    anomaly_pct:  float   # spread_pct - baseline_pct（%）

@@ -42,20 +42,22 @@ REST_BASE: dict[str, str] = {
 
 # ─── 测试网 WebSocket 地址 ───────────────────────────────────────────────────
 TESTNET_WS_URLS: dict[str, str] = {
-    "binance": "wss://stream.testnet.binance.vision/stream",  # Binance Spot Testnet
-    "okx":     "wss://ws.okx.com:8443/ws/v5/public",        # OKX Demo 用 isDemo flag
-    "gate":    "wss://fx-ws-testnet.gateio.ws/v4/ws/usdt",   # Gate Testnet
-    "bitget":  "wss://ws.bitget.com/v2/ws/public",           # Bitget Demo 用 header
-    # "htx":   "",  # HTX 无明确 testnet
+    # Binance 期货测试网（非现货）：wss://stream.binancefuture.com
+    # tracker 行情仍走主网 WS，此处仅备注，不用于行情订阅
+    "binance": "wss://stream.binancefuture.com/ws",
+    "okx":     "wss://ws.okx.com:8443/ws/v5/public",       # OKX Demo 同主网地址，靠 header 区分
+    "gate":    "wss://fx-ws-testnet.gateio.ws/v4/ws/usdt",  # Gate 独立测试网
+    "bitget":  "wss://ws.bitget.com/v2/ws/public",          # Bitget Demo 同主网地址，靠 header 区分
+    # "htx":   "",  # HTX 无测试网
 }
 
-# ─── 测试网 REST 地址 ────────────────────────────────────────────────────────
+# ─── 测试网 REST 地址（下单用）──────────────────────────────────────────────
 TESTNET_REST_BASE: dict[str, str] = {
-    "binance": "https://testnet.binance.vision",
-    "okx":     "https://www.okx.com",  # Demo trading 用 test-api 路径或 isDemo flag
-    "gate":    "https://fx-api-testnet.gateio.ws",
-    "bitget":  "https://api.bitget.com",  # Demo 用 PAPTRADING header
-    # "htx":   "",
+    "binance": "https://testnet.binancefuture.com",          # Binance USDT-M 期货测试网
+    "okx":     "https://www.okx.com",                       # OKX Demo 同主网，靠 x-simulated-trading:1 区分
+    "gate":    "https://fx-api-testnet.gateio.ws",           # Gate 独立测试网
+    "bitget":  "https://api.bitget.com",                    # Bitget Demo 同主网，靠 paptrading:1 区分
+    # "htx":   "",  # HTX 无测试网，暂不支持
 }
 
 # ─── 标的格式转换 ────────────────────────────────────────────────────────────

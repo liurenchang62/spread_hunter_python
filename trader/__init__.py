@@ -1,1 +1,3 @@
-"""交易执行层：实盘 / 模拟下单、订单与路由（待接入交易所 API）。"""
+"""交易执行层：实盘 / 模拟下单。"""
+
+from trader.trader import Trader
