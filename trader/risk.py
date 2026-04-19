@@ -65,6 +65,7 @@ class RiskManager:
     def __init__(self, clients: dict):
         """
         clients: {exchange: BaseClient}，用于查询余额。
+        proxy 从每个 client.proxy 取得。
         """
         self._clients = clients
         self.state    = RiskState()
@@ -241,7 +242,7 @@ class RiskManager:
         async with sess.get(
             f"{client.base}/fapi/v2/balance",
             params=params, headers={"X-MBX-APIKEY": client.keys["key"]},
-            ssl=False, timeout=aiohttp.ClientTimeout(total=5),
+            ssl=False, timeout=aiohttp.ClientTimeout(total=5), **client._px(),
         ) as r:
             data = await r.json()
         for item in data:
@@ -266,7 +267,7 @@ class RiskManager:
             headers["x-simulated-trading"] = "1"
         async with sess.get(
             f"{client.base}{path}", headers=headers, ssl=False,
-            timeout=aiohttp.ClientTimeout(total=5),
+            timeout=aiohttp.ClientTimeout(total=5), **client._px(),
         ) as r:
             data = await r.json()
         if data.get("code") == "0":
@@ -285,35 +286,51 @@ class RiskManager:
         async with sess.get(
             f"{client.base}{path}",
             headers={"KEY": client.keys["key"], "SIGN": sig, "Timestamp": ts},
-            ssl=False, timeout=aiohttp.ClientTimeout(total=5),
+            ssl=False, timeout=aiohttp.ClientTimeout(total=5), **client._px(),
         ) as r:
             data = await r.json()
         return float(data.get("available", 0)) if isinstance(data, dict) else None
 
     async def _fetch_bitget(self, client, sess) -> Optional[float]:
         import base64 as _b64, hashlib, hmac as _hmac, time as _time
-        path = "/api/v2/mix/account/accounts?productType=USDT-FUTURES"
-        ts   = str(int(_time.time() * 1000))
-        sig  = _b64.b64encode(
-            _hmac.new(client.keys["secret"].encode(),
-                      (ts + "GET" + path).encode(), hashlib.sha256).digest()
-        ).decode()
-        headers = {
-            "ACCESS-KEY": client.keys["key"], "ACCESS-SIGN": sig,
-            "ACCESS-TIMESTAMP": ts,
-            "ACCESS-PASSPHRASE": client.keys.get("passphrase", ""),
-        }
-        if not client.live:
-            headers["paptrading"] = "1"
-        async with sess.get(
-            f"{client.base}{path}", headers=headers, ssl=False,
-            timeout=aiohttp.ClientTimeout(total=5),
-        ) as r:
-            data = await r.json()
-        if str(data.get("code", "")) == "00000":
-            for item in (data.get("data") or []):
-                if item.get("marginCoin") == "USDT":
-                    return float(item.get("available", 0))
+
+        # Bitget 有两种 Demo 模式：
+        # 1. PAP Trading (带 paptrading header) → productType=USDT-FUTURES
+        # 2. 模拟币模式 (不带 header) → productType=SUSDT-FUTURES
+        # 先尝试模拟币模式（更常见）
+        for product_type in ["SUSDT-FUTURES", "USDT-FUTURES"]:
+            path = f"/api/v2/mix/account/accounts?productType={product_type}"
+            ts   = str(int(_time.time() * 1000))
+            sig  = _b64.b64encode(
+                _hmac.new(client.keys["secret"].encode(),
+                          (ts + "GET" + path).encode(), hashlib.sha256).digest()
+            ).decode()
+            headers = {
+                "ACCESS-KEY": client.keys["key"], "ACCESS-SIGN": sig,
+                "ACCESS-TIMESTAMP": ts,
+                "ACCESS-PASSPHRASE": client.keys.get("passphrase", ""),
+            }
+            # PAP Trading 模式才需要 paptrading header
+            if not client.live and product_type == "USDT-FUTURES":
+                headers["paptrading"] = "1"
+
+            try:
+                async with sess.get(
+                    f"{client.base}{path}", headers=headers, ssl=False,
+                    timeout=aiohttp.ClientTimeout(total=5), **client._px(),
+                ) as r:
+                    data = await r.json()
+
+                if str(data.get("code", "")) == "00000":
+                    for item in (data.get("data") or []):
+                        # 模拟币模式用 SUSDT，实盘/PAP模式用 USDT
+                        if item.get("marginCoin") in ["USDT", "SUSDT"]:
+                            logger.debug(f"[risk] Bitget 余额查询成功 ({product_type}): {item.get('available', 0)} {item.get('marginCoin')}")
+                            return float(item.get("available", 0))
+            except Exception as e:
+                logger.debug(f"[risk] Bitget {product_type} 查询失败: {e}")
+                continue
+
         return None
 
     # ─── 内部辅助 ─────────────────────────────────────────────────────────────

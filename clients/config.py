@@ -18,9 +18,15 @@ EXCHANGE_TIERS = {
     "htx":     "small",
 }
 
-BIG_EXCHANGES:   list[str] = [ex for ex, tier in EXCHANGE_TIERS.items() if tier == "big"]
-SMALL_EXCHANGES: list[str] = [ex for ex, tier in EXCHANGE_TIERS.items() if tier == "small"]
-ALL_EXCHANGES:   list[str] = list(EXCHANGE_TIERS.keys())
+# ─── 参与交易的交易所列表（可自由配置）──────────────────────────────────────
+# 只有在此列表中的交易所才会被初始化和用于交易
+# HTX 无测试网，默认不参与模拟盘交易
+ACTIVE_EXCHANGES: list[str] = ["binance", "okx", "gate", "bitget"]
+
+# 根据 ACTIVE_EXCHANGES 动态计算大所/小所列表
+BIG_EXCHANGES:   list[str] = [ex for ex in ACTIVE_EXCHANGES if EXCHANGE_TIERS.get(ex) == "big"]
+SMALL_EXCHANGES: list[str] = [ex for ex in ACTIVE_EXCHANGES if EXCHANGE_TIERS.get(ex) == "small"]
+ALL_EXCHANGES:   list[str] = ACTIVE_EXCHANGES.copy()
 
 # ─── WebSocket 地址（主网 / 永续合约）────────────────────────────────────────
 WS_URLS: dict[str, str] = {
@@ -55,7 +61,7 @@ TESTNET_WS_URLS: dict[str, str] = {
 TESTNET_REST_BASE: dict[str, str] = {
     "binance": "https://testnet.binancefuture.com",          # Binance USDT-M 期货测试网
     "okx":     "https://www.okx.com",                       # OKX Demo 同主网，靠 x-simulated-trading:1 区分
-    "gate":    "https://fx-api-testnet.gateio.ws",           # Gate 独立测试网
+    "gate":    "https://api-testnet.gateapi.io",              # Gate 独立测试网
     "bitget":  "https://api.bitget.com",                    # Bitget Demo 同主网，靠 paptrading:1 区分
     # "htx":   "",  # HTX 无测试网，暂不支持
 }

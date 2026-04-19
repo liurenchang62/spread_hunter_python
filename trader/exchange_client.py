@@ -96,16 +96,22 @@ def _to_contracts(target_qty: float, ct_val: float) -> int:
 class BaseClient:
     exchange: str = ""
 
-    def __init__(self, live: bool, keys: dict):
+    def __init__(self, live: bool, keys: dict, proxy: str = ""):
         self.live  = live
         self.keys  = keys
         self.base  = REST_BASE[self.exchange] if live else TESTNET_REST_BASE[self.exchange]
+        self.proxy = proxy or ""
         self._session: Optional[aiohttp.ClientSession] = None
 
     async def _sess(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
+            connector = aiohttp.TCPConnector(ssl=False)
+            self._session = aiohttp.ClientSession(connector=connector)
         return self._session
+
+    def _px(self) -> dict:
+        """返回代理参数 kwargs，无代理时为空 dict。"""
+        return {"proxy": self.proxy} if self.proxy else {}
 
     async def close(self):
         if self._session and not self._session.closed:
@@ -153,7 +159,7 @@ class BinanceClient(BaseClient):
             sess = await self._sess()
             async with sess.post(
                 f"{self.base}/fapi/v1/order",
-                params=params, headers=headers, ssl=False,
+                params=params, headers=headers, ssl=False, **self._px(),
             ) as r:
                 data = await r.json()
             if r.status == 200:
@@ -208,7 +214,7 @@ class OKXClient(BaseClient):
             sess = await self._sess()
             async with sess.post(
                 f"{self.base}{path}", headers=self._sign("POST", path, body),
-                data=body, ssl=False,
+                data=body, ssl=False, **self._px(),
             ) as r:
                 data = await r.json()
             if data.get("code") == "0":
@@ -233,7 +239,7 @@ class OKXClient(BaseClient):
             sess = await self._sess()
             async with sess.get(
                 f"{self.base}{path}", headers=self._sign("GET", path),
-                ssl=False, timeout=aiohttp.ClientTimeout(total=2),
+                ssl=False, timeout=aiohttp.ClientTimeout(total=2), **self._px(),
             ) as r:
                 data = await r.json()
             if data.get("code") == "0" and data.get("data"):
@@ -279,7 +285,7 @@ class GateClient(BaseClient):
             sess = await self._sess()
             async with sess.post(
                 f"{self.base}{path}", headers=self._sign("POST", path, body),
-                data=body, ssl=False,
+                data=body, ssl=False, **self._px(),
             ) as r:
                 data = await r.json()
             if r.status in (200, 201):
@@ -337,7 +343,7 @@ class BitgetClient(BaseClient):
             sess = await self._sess()
             async with sess.post(
                 f"{self.base}{path}", headers=self._sign("POST", path, body),
-                data=body, ssl=False,
+                data=body, ssl=False, **self._px(),
             ) as r:
                 data = await r.json()
             if str(data.get("code", "")) == "00000":
@@ -371,7 +377,7 @@ class BitgetClient(BaseClient):
             sess = await self._sess()
             async with sess.get(
                 f"{self.base}{path}", headers=headers, ssl=False,
-                timeout=aiohttp.ClientTimeout(total=2),
+                timeout=aiohttp.ClientTimeout(total=2), **self._px(),
             ) as r:
                 data = await r.json()
             if str(data.get("code", "")) == "00000" and data.get("data"):
@@ -385,7 +391,7 @@ class BitgetClient(BaseClient):
 
 # ─── 工厂函数 ─────────────────────────────────────────────────────────────────
 
-def build_clients(live: bool) -> dict[str, BaseClient]:
+def build_clients(live: bool, proxy: str = "") -> dict[str, BaseClient]:
     keys    = _load_keys()
     clients = {}
     for exchange, cls in [("binance", BinanceClient), ("okx", OKXClient),
@@ -394,6 +400,7 @@ def build_clients(live: bool) -> dict[str, BaseClient]:
         if not k.get("key"):
             logger.warning(f"[{exchange}] 未配置 API key，跳过")
             continue
-        clients[exchange] = cls(live=live, keys=k)
-        logger.info(f"[{exchange}] client 初始化 ({'主网' if live else '测试网'})")
+        clients[exchange] = cls(live=live, keys=k, proxy=proxy)
+        logger.info(f"[{exchange}] client 初始化 ({'主网' if live else '测试网'}"
+                    f"{' proxy='+proxy if proxy else ''})")
     return clients

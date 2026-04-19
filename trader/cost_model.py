@@ -18,7 +18,7 @@ from trader.config import (
     HOLD_ESTIMATE_S,
     MIN_NET_ROI,
     MIN_PROFIT_USDT,
-    PAIR_CAPITAL_USDT,
+    PAIR_CAPITAL_FALLBACK_USDT,
     SLIPPAGE_MULTIPLIER,
 )
 from trader.market_info import MarketInfo
@@ -42,14 +42,19 @@ def evaluate(
     big: str,
     small: str,
     mi: MarketInfo,
+    leg_budget: float | None = None,
 ) -> CostResult:
     """
     基于当前 MarketEvent 估算本次开仓的预期净利润。
 
+    leg_budget: 单腿资金上限（USDT）。由 trader 根据实时余额动态传入；
+                未传入时回退到 PAIR_CAPITAL_FALLBACK_USDT / 2。
+
     方向 long：小所买入，大所卖空（对冲）。
     方向 short：小所卖空，大所买入（对冲）。
     """
-    leg_budget = PAIR_CAPITAL_USDT / 2.0
+    if leg_budget is None:
+        leg_budget = PAIR_CAPITAL_FALLBACK_USDT / 2.0
 
     # 1. 确定开仓参考价格
     #    小所 long：以 ask 买入；small short：以 bid 卖出

@@ -207,6 +207,7 @@ async def _run_exchange(
     callback: TickCallback,
     connected: set[str],
     stop_event: asyncio.Event,
+    reconnect_cb=None,          # Optional[Callable[[str], None]]
 ):
     """单个交易所的 WebSocket 主循环，断线后指数退避重连。"""
     url     = _build_ws_url(exchange, symbols)
@@ -223,9 +224,15 @@ async def _run_exchange(
                 compression=None,   # 手动解 gzip（HTX）
                 open_timeout=10,
             ) as ws:
+                was_connected = exchange in connected
                 retry = 0
                 connected.add(exchange)
-                logger.info(f"[{exchange}] 已连接")
+                logger.info(f"[{exchange}] {'重新连接' if was_connected else '已连接'}")
+                if reconnect_cb is not None:
+                    try:
+                        reconnect_cb(exchange)
+                    except Exception:
+                        pass
 
                 # 发送订阅消息
                 if sub_msg:
@@ -294,10 +301,12 @@ class WSFeed:
         await feed.stop()
     """
 
-    def __init__(self, symbols: list[str], callback: TickCallback):
-        self.symbols    = symbols
-        self.symbol_set = set(symbols)
-        self.callback   = callback
+    def __init__(self, symbols: list[str], callback: TickCallback,
+                 reconnect_cb=None):
+        self.symbols      = symbols
+        self.symbol_set   = set(symbols)
+        self.callback     = callback
+        self.reconnect_cb = reconnect_cb   # Optional[Callable[[str], None]]
         self.connected: set[str] = set()
         self._stop      = asyncio.Event()
         self._tasks: list[asyncio.Task] = []
@@ -308,7 +317,8 @@ class WSFeed:
         for ex in ALL_EXCHANGES:
             t = asyncio.create_task(
                 _run_exchange(ex, self.symbols, self.symbol_set,
-                              self.callback, self.connected, self._stop),
+                              self.callback, self.connected, self._stop,
+                              self.reconnect_cb),
                 name=f"ws_{ex}",
             )
             self._tasks.append(t)

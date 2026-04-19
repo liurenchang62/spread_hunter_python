@@ -62,13 +62,18 @@ class Position:
     def is_open(self) -> bool:
         return self.status == "open"
 
-    def calc_pnl(self) -> float:
-        """根据两腿成交价计算理论 PnL（不含已记录手续费以外的滑点）。"""
+    def unrealized_pnl(self, small_mid: float, big_mid: float) -> float:
+        """
+        基于当前市场价估算未实现 PnL（不含手续费）。
+        small_mid / big_mid：两所当前中间价。
+        """
         if not self.small_leg or not self.big_leg:
             return 0.0
-        # small leg PnL
+        qty = self.small_leg.size_base
         if self.direction == "long":
-            small_pnl = (self.small_leg.entry_price - self.small_leg.entry_price) * self.small_leg.size_base  # 未平仓时为0
+            # 小所做多：价格涨赚；大所做空：价格跌赚
+            return (small_mid - self.small_leg.entry_price) * qty \
+                 + (self.big_leg.entry_price - big_mid)    * qty
         else:
-            small_pnl = 0.0
-        return small_pnl - self.small_leg.fee_usdt - self.big_leg.fee_usdt
+            return (self.small_leg.entry_price - small_mid) * qty \
+                 + (big_mid - self.big_leg.entry_price)     * qty

@@ -17,6 +17,7 @@ Clients 模块：交易所客户端配置管理。
 from .config import (
     # 交易所分级
     EXCHANGE_TIERS,
+    ACTIVE_EXCHANGES,
     BIG_EXCHANGES,
     SMALL_EXCHANGES,
     ALL_EXCHANGES,
@@ -33,6 +34,7 @@ from .config import (
 
 __all__ = [
     "EXCHANGE_TIERS",
+    "ACTIVE_EXCHANGES",
     "BIG_EXCHANGES",
     "SMALL_EXCHANGES",
     "ALL_EXCHANGES",

@@ -105,16 +105,22 @@ class MarketInfo:
 
 # ─── 异步拉取函数 ─────────────────────────────────────────────────────────────
 
+def _px(proxy: str) -> dict:
+    return {"proxy": proxy} if proxy else {}
+
+
 async def _fetch_binance_info(
     session: aiohttp.ClientSession,
     mi: MarketInfo,
     symbols: set[str],
+    proxy: str = "",
 ):
     """拉取 Binance USDT-M 合约规格（LOT_SIZE）和当前资金费率。"""
     base = REST_BASE["binance"]   # 公开接口走主网即可
     try:
         async with session.get(
-            f"{base}/fapi/v1/exchangeInfo", ssl=False, timeout=aiohttp.ClientTimeout(total=10)
+            f"{base}/fapi/v1/exchangeInfo", ssl=False,
+            timeout=aiohttp.ClientTimeout(total=10), **_px(proxy),
         ) as r:
             data = await r.json()
         for s in data.get("symbols", []):
@@ -141,7 +147,8 @@ async def _fetch_binance_info(
     # 资金费率
     try:
         async with session.get(
-            f"{base}/fapi/v1/premiumIndex", ssl=False, timeout=aiohttp.ClientTimeout(total=10)
+            f"{base}/fapi/v1/premiumIndex", ssl=False,
+            timeout=aiohttp.ClientTimeout(total=10), **_px(proxy),
         ) as r:
             data = await r.json()
         for item in data:
@@ -157,6 +164,7 @@ async def _fetch_okx_info(
     session: aiohttp.ClientSession,
     mi: MarketInfo,
     symbols: set[str],
+    proxy: str = "",
 ):
     """拉取 OKX USDT-SWAP 合约规格（ctVal, lotSz）和当前资金费率。"""
     base = REST_BASE["okx"]
@@ -164,7 +172,7 @@ async def _fetch_okx_info(
         async with session.get(
             f"{base}/api/v5/public/instruments",
             params={"instType": "SWAP"},
-            ssl=False, timeout=aiohttp.ClientTimeout(total=10),
+            ssl=False, timeout=aiohttp.ClientTimeout(total=10), **_px(proxy),
         ) as r:
             data = await r.json()
         for inst in data.get("data", []):
@@ -196,7 +204,7 @@ async def _fetch_okx_info(
             async with session.get(
                 f"{base}/api/v5/public/funding-rate",
                 params={"instId": inst_id},
-                ssl=False, timeout=aiohttp.ClientTimeout(total=5),
+                ssl=False, timeout=aiohttp.ClientTimeout(total=5), **_px(proxy),
             ) as r:
                 d = await r.json()
             items = d.get("data", [])
@@ -213,13 +221,14 @@ async def _fetch_gate_info(
     session: aiohttp.ClientSession,
     mi: MarketInfo,
     symbols: set[str],
+    proxy: str = "",
 ):
     """拉取 Gate USDT 永续合约规格（quanto_multiplier）和资金费率。"""
     base = REST_BASE["gate"]
     try:
         async with session.get(
             f"{base}/api/v4/futures/usdt/contracts",
-            ssl=False, timeout=aiohttp.ClientTimeout(total=10),
+            ssl=False, timeout=aiohttp.ClientTimeout(total=10), **_px(proxy),
         ) as r:
             data = await r.json()
         for c in data:
@@ -247,7 +256,7 @@ async def _fetch_gate_info(
     try:
         async with session.get(
             f"{base}/api/v4/futures/usdt/funding_rate",
-            ssl=False, timeout=aiohttp.ClientTimeout(total=10),
+            ssl=False, timeout=aiohttp.ClientTimeout(total=10), **_px(proxy),
         ) as r:
             data = await r.json()
         if isinstance(data, list):
@@ -265,26 +274,28 @@ async def _fetch_bitget_info(
     session: aiohttp.ClientSession,
     mi: MarketInfo,
     symbols: set[str],
+    proxy: str = "",
 ):
-    """拉取 Bitget USDT-M 合约规格（sizeMultiplier / minTradeNum）和资金费率。"""
+    """拉取 Bitget USDT-M 合约规格和资金费率（API v2）。"""
     base = REST_BASE["bitget"]
+
+    # 合约规格
     try:
         async with session.get(
-            f"{base}/api/mix/v1/market/contracts",
-            params={"productType": "umcbl"},
-            ssl=False, timeout=aiohttp.ClientTimeout(total=10),
+            f"{base}/api/v2/mix/market/contracts",
+            params={"productType": "USDT-FUTURES"},
+            ssl=False, timeout=aiohttp.ClientTimeout(total=10), **_px(proxy),
         ) as r:
             data = await r.json()
         for c in (data.get("data") or []):
-            sym_raw = c.get("symbolName", "") or c.get("symbol", "")
-            sym = sym_raw.upper().replace("_UMCBL", "").replace("PERP", "")
+            sym_raw = c.get("symbol", "")
+            sym = sym_raw.upper()
             if not sym.endswith("USDT"):
-                sym = sym + "USDT"
+                continue
             if sym not in symbols:
                 continue
-            # sizeMultiplier = minimum size step in base coin
-            step   = float(c.get("sizeMultiplier", "0.001") or "0.001")
-            min_q  = float(c.get("minTradeNum",    "0.001") or "0.001")
+            step  = float(c.get("sizeMultiplier", "0.001") or "0.001")
+            min_q = float(c.get("minTradeNum",    "0.001") or "0.001")
             mi.symbol_info[("bitget", sym)] = SymbolInfo(
                 exchange="bitget", symbol=sym,
                 qty_step=step, min_qty=min_q,
@@ -297,37 +308,57 @@ async def _fetch_bitget_info(
     # 资金费率
     try:
         async with session.get(
-            f"{base}/api/mix/v1/market/symbol-fundRate",
-            params={"productType": "umcbl"},
-            ssl=False, timeout=aiohttp.ClientTimeout(total=10),
+            f"{base}/api/v2/mix/market/funding-rate-history",
+            params={"productType": "USDT-FUTURES", "pageSize": "1"},
+            ssl=False, timeout=aiohttp.ClientTimeout(total=10), **_px(proxy),
         ) as r:
             data = await r.json()
-        for item in (data.get("data") or []):
-            sym_raw = item.get("symbol", "")
-            sym = sym_raw.upper().replace("_UMCBL", "")
-            if not sym.endswith("USDT"):
-                sym = sym + "USDT"
-            if sym in symbols:
-                fr = float(item.get("fundingRate", 0))
+        # v2 批量接口：逐标的查资金费率
+        for sym in list(symbols)[:20]:
+            pass  # 批量端点需要 symbol 参数，改用逐个查询
+    except Exception:
+        pass
+
+    # 逐个查资金费率（v2 当前费率接口）
+    fetched = 0
+    for sym in list(symbols)[:20]:
+        try:
+            async with session.get(
+                f"{base}/api/v2/mix/market/current-fund-rate",
+                params={"symbol": sym, "productType": "USDT-FUTURES"},
+                ssl=False, timeout=aiohttp.ClientTimeout(total=5), **_px(proxy),
+            ) as r:
+                d = await r.json()
+            items = d.get("data") or []
+            if items:
+                fr = float(items[0].get("fundingRate", 0))
                 mi.funding_rate[("bitget", sym)] = fr
-    except Exception as e:
-        logger.warning(f"[market_info] Bitget fundingRate 失败: {e}")
+                fetched += 1
+        except Exception:
+            pass
+    logger.info(f"[market_info] Bitget 资金费率已更新 {fetched} 个")
 
 
 # ─── 主入口 ───────────────────────────────────────────────────────────────────
 
-async def refresh_market_info(mi: MarketInfo, symbols: set[str]) -> None:
+async def refresh_market_info(
+    mi: MarketInfo,
+    symbols: set[str],
+    proxy: str = "",
+) -> None:
     """
     并发拉取4所的合约规格 + 资金费率，写入 mi 对象。
     symbols：内部格式，如 {"BTCUSDT", "ETHUSDT", ...}
+    proxy：HTTP 代理地址，国内访问 OKX/Bitget 需要传入。
     """
     logger.info(f"[market_info] 开始刷新市场信息（{len(symbols)} 个标的）…")
-    async with aiohttp.ClientSession() as session:
+    connector = aiohttp.TCPConnector(ssl=False)
+    async with aiohttp.ClientSession(connector=connector) as session:
         await asyncio.gather(
-            _fetch_binance_info(session, mi, symbols),
-            _fetch_okx_info(session, mi, symbols),
-            _fetch_gate_info(session, mi, symbols),
-            _fetch_bitget_info(session, mi, symbols),
+            _fetch_binance_info(session, mi, symbols, proxy),
+            _fetch_okx_info(session, mi, symbols, proxy),
+            _fetch_gate_info(session, mi, symbols, proxy),
+            _fetch_bitget_info(session, mi, symbols, proxy),
             return_exceptions=True,
         )
     mi._last_refresh = time.time()

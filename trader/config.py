@@ -13,11 +13,16 @@ LIVE_TRADING_ON = False   # False = 测试网模拟；True = 主网实盘
 # 测试网支持的交易所（HTX 无测试网，暂不参与交易）
 TESTNET_EXCHANGES = {"binance", "okx", "gate", "bitget"}
 
+# ─── 网络代理 ─────────────────────────────────────────────────────────────────
+# 国内访问 OKX / Bitget 需要代理，留空则不使用
+PROXY_URL = "http://127.0.0.1:7897"
+
 # ─── 资金结构 ─────────────────────────────────────────────────────────────────
-# 每个套利对（big-small-symbol）两腿合计最大资金（USDT）
-# 单腿 = PAIR_CAPITAL_USDT / 2
-# 后续接入账户余额查询后改为动态计算（取4所最小余额的固定比例）
-PAIR_CAPITAL_USDT = 100.0
+# 每个套利对（big-small-symbol）两腿合计资金 = 各所最小余额 × PAIR_CAPITAL_PCT
+# 单腿 = min_balance × PAIR_CAPITAL_PCT / 2 = min_balance × 0.5%
+# 余额数据不可用时（首次刷新前）回退到 PAIR_CAPITAL_FALLBACK_USDT
+PAIR_CAPITAL_PCT          = 0.005   # 两腿合计：各所最小余额的 0.5%（单腿 0.25%）
+PAIR_CAPITAL_FALLBACK_USDT = 5.0   # 兜底静态值（余额尚未拉取时使用）
 
 MAX_POSITIONS_PER_PAIR   = 3    # 同一套利对同时最多 N 笔
 MAX_POSITIONS_PER_SYMBOL = 15   # 同一合约跨所有套利对最多 N 笔

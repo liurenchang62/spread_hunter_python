@@ -79,8 +79,9 @@ class Tracker:
         self._stop        = asyncio.Event()
 
         # trader 注册的回调（同步）
-        self._tick_cb        = None   # cb(tick: Tick) — 每个 tick 触发，用于 in-flow exit 检查
-        self._opportunity_cb = None   # cb(sig: MarketEvent) — 仅 opportunity 信号触发，用于开仓
+        self._tick_cb        = None   # cb(tick: Tick)        — 每个 tick 触发
+        self._opportunity_cb = None   # cb(sig: MarketEvent)  — opportunity 信号触发
+        self._reconnect_cb   = None   # cb(exchange: str)     — WS 重连时触发
 
     def register_tick_callback(self, cb) -> None:
         """
@@ -96,6 +97,14 @@ class Tracker:
         取代 signal_queue，实现 latest-wins 语义（每个信号直接传给 trader，不经队列积压）。
         """
         self._opportunity_cb = cb
+
+    def register_reconnect_callback(self, cb) -> None:
+        """
+        trader 调用此方法注册 WS 重连回调。
+        cb(exchange: str) 在某所 WS 重新连接时同步调用。
+        trader 用此触发持仓的强制扫描，避免断线期间错过 exit 信号。
+        """
+        self._reconnect_cb = cb
 
     # ─── Tick 处理（同步，被 WS 回调调用）────────────────────────────────────
 
@@ -143,18 +152,17 @@ class Tracker:
 
         logger.info(f"监控 {len(symbols)} 个标的: {', '.join(symbols[:8])}{'…' if len(symbols)>8 else ''}")
 
-        # 启动 WS
-        self.feed = WSFeed(symbols, self._on_tick)
+        # 启动 WS（传入 reconnect 回调，重连时通知 trader）
+        self.feed = WSFeed(symbols, self._on_tick, reconnect_cb=self._reconnect_cb)
         await self.feed.start()
 
         # 等待 WS 稳定连接（最多10s）
         await self._wait_connections()
 
-        # 主循环 + update 推送（并发运行）
+        # 主循环
         try:
             await asyncio.gather(
                 self._main_loop(),
-                self._update_loop(),
             )
         except asyncio.CancelledError:
             pass
@@ -202,58 +210,16 @@ class Tracker:
                     if s not in self.latest:
                         self.latest[s] = {}
 
-    async def _update_loop(self):
-        """
-        每 100ms 扫一次 active_positions，对每个持仓对推送当前异常值。
-        trader 消费这些 position_update 事件来判断是否平仓。
-        """
-        while not self._stop.is_set():
-            await asyncio.sleep(0.1)
-
-            if not self.active_positions or not self.baseline.warmed_up:
-                continue
-
-            now_ns  = time.monotonic_ns()
-            wall_ms = time.time() * 1000
-
-            for (big, small, sym) in list(self.active_positions):
-                sym_map = self.latest.get(sym, {})
-                bt = sym_map.get(big)
-                st = sym_map.get(small)
-                if not bt or not st or st.mid <= 0:
-                    continue
-
-                anomaly = self.baseline.get_pair_anomaly(big, small, sym, bt.mid, st.mid)
-                if anomaly is None:
-                    continue
-
-                event = MarketEvent(
-                    event_type     = "position_update",
-                    symbol         = sym,
-                    big_exchange   = big,
-                    small_exchange = small,
-                    anomaly_pct    = anomaly,
-                    baseline_pct   = self.baseline.get_pair_baseline(big, small, sym),
-                    big_bid        = bt.bid,
-                    big_ask        = bt.ask,
-                    big_mid        = bt.mid,
-                    small_bid      = st.bid,
-                    small_ask      = st.ask,
-                    small_mid      = st.mid,
-                    ts_ns          = now_ns,
-                    wall_ms        = wall_ms,
-                )
-                self.signal_queue.put_nowait(event)
-
     def _save_params(self):
         """保存本次运行的参数到 logs/params.json"""
         import json
         from . import config
-        
+        from clients import BIG_EXCHANGES, SMALL_EXCHANGES
+
         params = {
             # 交易所配置
-            "BIG_EXCHANGES": config.BIG_EXCHANGES,
-            "SMALL_EXCHANGES": config.SMALL_EXCHANGES,
+            "BIG_EXCHANGES": BIG_EXCHANGES,
+            "SMALL_EXCHANGES": SMALL_EXCHANGES,
             # 标的配置
             "TOP_N_SYMBOLS": config.TOP_N_SYMBOLS,
             "MIN_VOLUME_USDT": config.MIN_VOLUME_USDT,

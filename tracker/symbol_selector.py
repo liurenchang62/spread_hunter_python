@@ -23,7 +23,7 @@ import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from .config import TOP_N_SYMBOLS, MIN_VOLUME_USDT, SYMBOL_REFRESH_H
-from clients import REST_BASE
+from clients import REST_BASE, ACTIVE_EXCHANGES, BIG_EXCHANGES, SMALL_EXCHANGES
 
 logger = logging.getLogger("tracker.symbols")
 
@@ -131,35 +131,71 @@ def _htx_symbols() -> set[str]:
 
 # ─── 主逻辑 ───────────────────────────────────────────────────────────────────
 
+# ─── 交易所标获取函数字典 ─────────────────────────────────────────────────────
+_SYMBOL_FETCHERS = {
+    "binance": _binance_symbols_with_volume,
+    "okx":     _okx_symbols,
+    "gate":    _gate_symbols,
+    "bitget":  _bitget_symbols,
+    "htx":     _htx_symbols,
+}
+
+
 async def fetch_common_symbols() -> list[str]:
     """
-    异步调度，返回5所都有的标的，按 Binance 24h 成交额从大到小排序，
-    最多返回 TOP_N_SYMBOLS 个。
+    异步调度，返回所有参与交易所（ACTIVE_EXCHANGES）共有的标的，
+    按 Binance 24h 成交额从大到小排序，最多返回 TOP_N_SYMBOLS 个。
     """
-    logger.info("开始拉取各交易所标的列表…")
+    logger.info(f"开始拉取各交易所标的列表…（参与交易所: {ACTIVE_EXCHANGES}）")
+
+    # 动态构建要查询的交易所列表
+    tasks = []
+    exchange_order = []  # 记录顺序以便解析结果
+
+    # Binance 必须第一个（作为成交额基准）
+    if "binance" in ACTIVE_EXCHANGES:
+        tasks.append(asyncio.to_thread(_binance_symbols_with_volume))
+        exchange_order.append("binance")
+
+    # 其他交易所
+    for ex in ACTIVE_EXCHANGES:
+        if ex != "binance" and ex in _SYMBOL_FETCHERS:
+            tasks.append(asyncio.to_thread(_SYMBOL_FETCHERS[ex]))
+            exchange_order.append(ex)
 
     # 并发调用（都是 IO 操作）
-    (bn_vol, okx_set, gate_set, bitget_set, htx_set) = await asyncio.gather(
-        asyncio.to_thread(_binance_symbols_with_volume),
-        asyncio.to_thread(_okx_symbols),
-        asyncio.to_thread(_gate_symbols),
-        asyncio.to_thread(_bitget_symbols),
-        asyncio.to_thread(_htx_symbols),
-    )
+    results = await asyncio.gather(*tasks)
 
-    logger.info(
-        f"各所标的数: Binance={len(bn_vol)} OKX={len(okx_set)} "
-        f"Gate={len(gate_set)} Bitget={len(bitget_set)} HTX={len(htx_set)}"
-    )
+    # 解析结果
+    result_map = dict(zip(exchange_order, results))
+    bn_vol = result_map.get("binance", {})
 
-    # 5所交集
-    common = set(bn_vol.keys()) & okx_set & gate_set & bitget_set & htx_set
+    # 日志输出各所标的数
+    counts_info = " | ".join([f"{ex}={len(result_map.get(ex, set() if ex != 'binance' else {}))}" for ex in exchange_order])
+    logger.info(f"各所标的数: {counts_info}")
+
+    # 计算交集（所有参与交易所共有的标的）
+    symbol_sets = []
+    for ex in exchange_order:
+        if ex == "binance":
+            symbol_sets.append(set(bn_vol.keys()))
+        else:
+            symbol_sets.append(set(result_map.get(ex, set())))
+
+    if not symbol_sets:
+        logger.warning("没有可用的交易所标的数据")
+        return []
+
+    common = symbol_sets[0]
+    for s in symbol_sets[1:]:
+        common &= s
 
     # 按 Binance 成交额排序，取前 N
     ranked = sorted(common, key=lambda s: bn_vol.get(s, 0), reverse=True)
     selected = ranked[:TOP_N_SYMBOLS]
 
-    logger.info(f"筛选完成：5所共同标的 {len(common)} 个，选用 {len(selected)} 个")
+    n_exchanges = len(exchange_order)
+    logger.info(f"筛选完成：{n_exchanges}所共同标的 {len(common)} 个，选用 {len(selected)} 个")
     if selected:
         preview = ", ".join(selected[:10])
         logger.info(f"前10: {preview}{'…' if len(selected) > 10 else ''}")

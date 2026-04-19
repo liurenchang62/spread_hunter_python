@@ -39,6 +39,9 @@ from trader.config import (
     LIVE_TRADING_ON,
     MAX_HOLD_SECONDS,
     MIN_ANOMALY_TO_OPEN_PCT,
+    PAIR_CAPITAL_PCT,
+    PAIR_CAPITAL_FALLBACK_USDT,
+    PROXY_URL,
     STOP_LOSS_PCT,
     TESTNET_EXCHANGES,
     MARKET_INFO_REFRESH_H,
@@ -63,12 +66,13 @@ class Trader:
         await asyncio.gather(tracker.start(), trader.start())
     """
 
-    def __init__(self, tracker):
+    def __init__(self, tracker, proxy: str = ""):
         self.tracker = tracker
         self._active = tracker.active_positions
 
+        self._proxy  = proxy or PROXY_URL
         self.pm      = PositionManager(self._active)
-        self.clients = build_clients(live=LIVE_TRADING_ON)
+        self.clients = build_clients(live=LIVE_TRADING_ON, proxy=self._proxy)
         self.mi      = MarketInfo()
         self.risk    = RiskManager(self.clients)
 
@@ -98,11 +102,12 @@ class Trader:
         # 注册同步回调（in-flow，最低延迟）
         self.tracker.register_opportunity_callback(self._on_opportunity)
         self.tracker.register_tick_callback(self._on_tick)
+        self.tracker.register_reconnect_callback(self._on_reconnect)
 
         # 初始拉取市场信息
         symbols = set(self.tracker.symbol_sel.symbols) if hasattr(self.tracker, "symbol_sel") else set()
         if symbols:
-            await refresh_market_info(self.mi, symbols)
+            await refresh_market_info(self.mi, symbols, proxy=self._proxy)
 
         # 启动风控后台（余额查询 + 日重置）
         await self.risk.start()
@@ -111,6 +116,7 @@ class Trader:
         try:
             await asyncio.gather(
                 self._timeout_loop(),
+                self._position_sweep_loop(),
                 self._market_info_refresh_loop(symbols),
                 self._daily_halt_monitor(),
             )
@@ -161,8 +167,15 @@ class Trader:
         if not self.pm.can_open(big, small, sym):
             return
 
+        # 动态单腿资金 = min(各所余额) × 1% / 2
+        balances = self.risk.state.balance
+        if balances:
+            leg_budget = min(balances.values()) * PAIR_CAPITAL_PCT / 2.0
+        else:
+            leg_budget = PAIR_CAPITAL_FALLBACK_USDT / 2.0
+
         # 成本模型（同步，纯计算）
-        cr: CostResult = cost_evaluate(sig, big, small, self.mi)
+        cr: CostResult = cost_evaluate(sig, big, small, self.mi, leg_budget=leg_budget)
         if not cr.should_trade:
             logger.debug(f"[trader] 成本模型拒绝 | {sym} {big}/{small} | {cr.reason}")
             return
@@ -214,6 +227,41 @@ class Trader:
             if reason:
                 task = self._loop.create_task(self._do_exit(pos, anomaly, reason))
                 self._exit_tasks[pos.id] = task
+
+    # ─── WS 重连回调（同步）──────────────────────────────────────────────────
+
+    def _on_reconnect(self, exchange: str):
+        """
+        某所 WS 重连时同步调用。
+        立即对涉及该交易所的所有开放持仓做一次 exit 检查，
+        补偿断线期间可能错过的 tick 信号。
+        """
+        if self._loop is None:
+            return
+        for pos in self.pm.open_positions():
+            if pos.status != "open":
+                continue
+            if pos.big_exchange != exchange and pos.small_exchange != exchange:
+                continue
+            if pos.id in self._exit_tasks and not self._exit_tasks[pos.id].done():
+                continue
+            sym = pos.symbol
+            big, small = pos.big_exchange, pos.small_exchange
+            latest   = self.tracker.latest.get(sym, {})
+            big_tick = latest.get(big)
+            sml_tick = latest.get(small)
+            if not big_tick or not sml_tick:
+                continue
+            anomaly = self.tracker.baseline.get_pair_anomaly(
+                big, small, sym, big_tick.mid, sml_tick.mid
+            )
+            if anomaly is None:
+                continue
+            reason = self._check_exit_reason(pos, anomaly)
+            if reason:
+                task = self._loop.create_task(self._do_exit(pos, anomaly, reason))
+                self._exit_tasks[pos.id] = task
+                logger.info(f"[trader] 重连后检测到 {pos.id} 满足 {reason}，触发平仓")
 
     # ─── 开仓执行（async，HTTP I/O）─────────────────────────────────────────
 
@@ -373,6 +421,39 @@ class Trader:
                     task = asyncio.ensure_future(self._do_exit(pos, 0.0, "timeout"))
                     self._exit_tasks[pos.id] = task
 
+    # ─── 持仓周期性扫描（WS 断线兜底）──────────────────────────────────────
+
+    async def _position_sweep_loop(self):
+        """
+        每 5 秒独立扫描所有开放持仓，用 tracker.latest 中缓存的最新价格
+        重新计算 exit 条件。
+        与 _on_tick（实时）和 _timeout_loop（超时）互补：
+        保证 WS 断线期间只要有任何一所还在推 tick，持仓仍能正常退出。
+        """
+        while not self._stop.is_set():
+            await asyncio.sleep(5.0)
+            for pos in self.pm.open_positions():
+                if pos.status != "open":
+                    continue
+                if pos.id in self._exit_tasks and not self._exit_tasks[pos.id].done():
+                    continue
+                sym = pos.symbol
+                big, small = pos.big_exchange, pos.small_exchange
+                latest   = self.tracker.latest.get(sym, {})
+                big_tick = latest.get(big)
+                sml_tick = latest.get(small)
+                if not big_tick or not sml_tick:
+                    continue
+                anomaly = self.tracker.baseline.get_pair_anomaly(
+                    big, small, sym, big_tick.mid, sml_tick.mid
+                )
+                if anomaly is None:
+                    continue
+                reason = self._check_exit_reason(pos, anomaly)
+                if reason:
+                    task = asyncio.ensure_future(self._do_exit(pos, anomaly, reason))
+                    self._exit_tasks[pos.id] = task
+
     # ─── 日止损监控 ────────────────────────────────────────────────────────
 
     async def _daily_halt_monitor(self):
@@ -404,7 +485,7 @@ class Trader:
             if hasattr(self.tracker, "symbol_sel"):
                 symbols = set(self.tracker.symbol_sel.symbols)
             if symbols:
-                await refresh_market_info(self.mi, symbols)
+                await refresh_market_info(self.mi, symbols, proxy=self._proxy)
 
     # ─── 辅助 ────────────────────────────────────────────────────────────────
 
